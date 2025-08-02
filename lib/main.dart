@@ -35,7 +35,9 @@ class AuthGate extends StatelessWidget {
         final user = snapshot.data;
         if (user != null) {
           // Add user to Firestore users table if not present, but don't overwrite existing planIds or assigned names
-          final userRef = FirebaseFirestore.instance.collection('users').doc(user.uid);
+          final userRef = FirebaseFirestore.instance
+              .collection('users')
+              .doc(user.uid);
           userRef.get().then((doc) {
             if (!doc.exists) {
               // Only create new user document if it doesn't exist
@@ -55,7 +57,9 @@ class AuthGate extends StatelessWidget {
               // Only update name if user has a display name and current name is empty
               final currentData = doc.data() ?? {};
               final currentName = currentData['name'] ?? '';
-              if (user.displayName != null && user.displayName!.isNotEmpty && currentName.isEmpty) {
+              if (user.displayName != null &&
+                  user.displayName!.isNotEmpty &&
+                  currentName.isEmpty) {
                 updateData['name'] = user.displayName!;
               }
               userRef.set(updateData, SetOptions(merge: true));
@@ -143,7 +147,9 @@ class HomeScreen extends StatelessWidget {
               Expanded(
                 child: ListView(
                   children:
-                      planIds.map((planId) => PlanTile(planId: planId)).toList(),
+                      planIds
+                          .map((planId) => PlanTile(planId: planId))
+                          .toList(),
                 ),
               ),
               Padding(
@@ -196,44 +202,53 @@ class PlanTile extends StatelessWidget {
       builder: (context, snapshot) {
         if (!snapshot.hasData) return ListTile(title: const Text('Loading...'));
         final plan = snapshot.data!.data() as Map<String, dynamic>? ?? {};
-        
+
         // Handle both old and new data structures
         List<String> exerciseIds = [];
-        
+
         // Check for new structure first (exercises array with exerciseId objects)
         if (plan.containsKey('exercises') && plan['exercises'] is List) {
           final exercisesList = List<Map<String, dynamic>>.from(
-            (plan['exercises'] as List).map((e) => e as Map<String, dynamic>)
+            (plan['exercises'] as List).map((e) => e as Map<String, dynamic>),
           );
-          
+
           // Sort by sortOrder if available
           exercisesList.sort((a, b) {
             final aOrder = a['sortOrder'] ?? 0;
             final bOrder = b['sortOrder'] ?? 0;
             return (aOrder as num).compareTo(bOrder as num);
           });
-          
+
           // Extract exerciseIds from the sorted list
-          exerciseIds = exercisesList
-              .map((exercise) => exercise['exerciseId'] as String?)
-              .where((id) => id != null)
-              .cast<String>()
-              .toList();
+          exerciseIds =
+              exercisesList
+                  .map((exercise) => exercise['exerciseId'] as String?)
+                  .where((id) => id != null)
+                  .cast<String>()
+                  .toList();
         }
         // Fallback to old structure (simple exerciseIds array)
-        else if (plan.containsKey('exerciseIds') && plan['exerciseIds'] is List) {
+        else if (plan.containsKey('exerciseIds') &&
+            plan['exerciseIds'] is List) {
           exerciseIds = List<String>.from(plan['exerciseIds'] ?? []);
         }
-        
+
         // Debug logging to help identify the issue
         print('Plan data: $plan');
         print('Exercise IDs found: $exerciseIds');
-        
+
         return ExpansionTile(
           title: Text(plan['name'] ?? 'Unnamed Plan'),
-          subtitle: exerciseIds.isEmpty 
-              ? const Text('No exercises found', style: TextStyle(color: Colors.red, fontSize: 12))
-              : Text('${exerciseIds.length} exercise(s)', style: const TextStyle(fontSize: 12)),
+          subtitle:
+              exerciseIds.isEmpty
+                  ? const Text(
+                    'No exercises found',
+                    style: TextStyle(color: Colors.red, fontSize: 12),
+                  )
+                  : Text(
+                    '${exerciseIds.length} exercise(s)',
+                    style: const TextStyle(fontSize: 12),
+                  ),
           children:
               exerciseIds.map((id) => ExerciseTile(exerciseId: id)).toList(),
         );
@@ -262,7 +277,7 @@ class ExerciseTile extends StatelessWidget {
         final videoUrl = exercise['videoUrl'];
         final createdAt = exercise['createdAt'];
         final updatedAt = exercise['updatedAt'];
-        
+
         // Build subtitle with available info
         List<String> subtitleParts = [];
         if (recommendedReps != null && recommendedReps.toString().isNotEmpty) {
@@ -276,26 +291,34 @@ class ExerciseTile extends StatelessWidget {
           }
           subtitleParts.add(shortDesc);
         }
-        
+
         return ExpansionTile(
           title: Text(title),
-          subtitle: subtitleParts.isNotEmpty 
-              ? Text(subtitleParts.join(' • '), style: const TextStyle(fontSize: 12))
-              : null,
+          subtitle:
+              subtitleParts.isNotEmpty
+                  ? Text(
+                    subtitleParts.join(' • '),
+                    style: const TextStyle(fontSize: 12),
+                  )
+                  : null,
           trailing: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
               // Last check-in display and Did it button
               StreamBuilder<QuerySnapshot>(
-                stream: FirebaseFirestore.instance
-                    .collection('exercise_check_ins')
-                    .where('userId', isEqualTo: FirebaseAuth.instance.currentUser?.uid)
-                    .where('exerciseId', isEqualTo: exerciseId)
-                    .snapshots(),
+                stream:
+                    FirebaseFirestore.instance
+                        .collection('exercise_check_ins')
+                        .where(
+                          'userId',
+                          isEqualTo: FirebaseAuth.instance.currentUser?.uid,
+                        )
+                        .where('exerciseId', isEqualTo: exerciseId)
+                        .snapshots(),
                 builder: (context, snapshot) {
                   DateTime? lastCheckIn;
                   bool doneToday = false;
-                  
+
                   if (snapshot.hasData && snapshot.data!.docs.isNotEmpty) {
                     // Sort by timestamp descending to get the latest
                     final docs = snapshot.data!.docs;
@@ -304,45 +327,49 @@ class ExerciseTile extends StatelessWidget {
                       final bData = b.data() as Map<String, dynamic>;
                       final aTs = aData['timestamp'];
                       final bTs = bData['timestamp'];
-                      
+
                       DateTime? aDt, bDt;
                       if (aTs is Timestamp) aDt = aTs.toDate();
                       if (bTs is Timestamp) bDt = bTs.toDate();
-                      
+
                       if (aDt == null && bDt == null) return 0;
                       if (aDt == null) return 1;
                       if (bDt == null) return -1;
                       return bDt.compareTo(aDt);
                     });
-                    
+
                     final latestDoc = docs.first;
                     final latestData = latestDoc.data() as Map<String, dynamic>;
                     final timestamp = latestData['timestamp'];
-                    
+
                     if (timestamp is Timestamp) {
                       lastCheckIn = timestamp.toDate();
                     }
-                    
+
                     // Check if done today
                     if (lastCheckIn != null) {
                       final now = DateTime.now();
-                      doneToday = lastCheckIn.year == now.year &&
-                                  lastCheckIn.month == now.month &&
-                                  lastCheckIn.day == now.day;
+                      doneToday =
+                          lastCheckIn.year == now.year &&
+                          lastCheckIn.month == now.month &&
+                          lastCheckIn.day == now.day;
                     }
                   }
-                  
+
                   return Row(
                     mainAxisSize: MainAxisSize.min,
                     children: [
                       // Last check-in display
                       if (lastCheckIn != null) ...[
                         Text(
-                          doneToday ? 'Last Done: Today!' : 'Last: ${lastCheckIn.month}/${lastCheckIn.day} ${lastCheckIn.hour.toString().padLeft(2, '0')}:${lastCheckIn.minute.toString().padLeft(2, '0')}',
+                          doneToday
+                              ? 'Last Done: Today!'
+                              : 'Last: ${lastCheckIn.month}/${lastCheckIn.day} ${lastCheckIn.hour.toString().padLeft(2, '0')}:${lastCheckIn.minute.toString().padLeft(2, '0')}',
                           style: TextStyle(
                             fontSize: 10,
                             color: doneToday ? Colors.grey : Colors.green,
-                            fontWeight: doneToday ? FontWeight.bold : FontWeight.normal,
+                            fontWeight:
+                                doneToday ? FontWeight.bold : FontWeight.normal,
                           ),
                         ),
                         const SizedBox(width: 8),
@@ -355,23 +382,28 @@ class ExerciseTile extends StatelessWidget {
                             await FirebaseFirestore.instance
                                 .collection('exercise_check_ins')
                                 .add({
-                              'userId': user.uid,
-                              'exerciseId': exerciseId,
-                              'timestamp': FieldValue.serverTimestamp(),
-                            });
+                                  'userId': user.uid,
+                                  'exerciseId': exerciseId,
+                                  'timestamp': FieldValue.serverTimestamp(),
+                                });
                           }
                         },
                         style: ElevatedButton.styleFrom(
-                          backgroundColor: doneToday ? Colors.grey : Colors.green,
+                          backgroundColor:
+                              doneToday ? Colors.grey : Colors.green,
                           foregroundColor: Colors.white,
-                          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 12,
+                            vertical: 4,
+                          ),
                           minimumSize: const Size(60, 30),
                         ),
                         child: Text(
                           'Did it!',
                           style: TextStyle(
                             fontSize: 12,
-                            fontStyle: doneToday ? FontStyle.italic : FontStyle.normal,
+                            fontStyle:
+                                doneToday ? FontStyle.italic : FontStyle.normal,
                           ),
                         ),
                       ),
@@ -389,10 +421,14 @@ class ExerciseTile extends StatelessWidget {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  if (description != null && description.toString().isNotEmpty) ...[
+                  if (description != null &&
+                      description.toString().isNotEmpty) ...[
                     const Text(
                       'Description:',
-                      style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
+                      style: TextStyle(
+                        fontWeight: FontWeight.bold,
+                        fontSize: 14,
+                      ),
                     ),
                     const SizedBox(height: 4),
                     Text(
@@ -401,12 +437,16 @@ class ExerciseTile extends StatelessWidget {
                     ),
                     const SizedBox(height: 12),
                   ],
-                  if (recommendedReps != null && recommendedReps.toString().isNotEmpty) ...[
+                  if (recommendedReps != null &&
+                      recommendedReps.toString().isNotEmpty) ...[
                     Row(
                       children: [
                         const Text(
                           'Recommended Repetitions: ',
-                          style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
+                          style: TextStyle(
+                            fontWeight: FontWeight.bold,
+                            fontSize: 13,
+                          ),
                         ),
                         Text(
                           recommendedReps.toString(),
@@ -421,12 +461,18 @@ class ExerciseTile extends StatelessWidget {
                       children: [
                         const Text(
                           'Video URL: ',
-                          style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
+                          style: TextStyle(
+                            fontWeight: FontWeight.bold,
+                            fontSize: 13,
+                          ),
                         ),
                         Expanded(
                           child: Text(
                             videoUrl.toString(),
-                            style: const TextStyle(fontSize: 13, color: Colors.blue),
+                            style: const TextStyle(
+                              fontSize: 13,
+                              color: Colors.blue,
+                            ),
                             overflow: TextOverflow.ellipsis,
                           ),
                         ),
@@ -439,11 +485,18 @@ class ExerciseTile extends StatelessWidget {
                       children: [
                         const Text(
                           'Created: ',
-                          style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12, color: Colors.grey),
+                          style: TextStyle(
+                            fontWeight: FontWeight.bold,
+                            fontSize: 12,
+                            color: Colors.grey,
+                          ),
                         ),
                         Text(
                           _formatDate(createdAt.toString()),
-                          style: const TextStyle(fontSize: 12, color: Colors.grey),
+                          style: const TextStyle(
+                            fontSize: 12,
+                            color: Colors.grey,
+                          ),
                         ),
                       ],
                     ),
@@ -454,11 +507,18 @@ class ExerciseTile extends StatelessWidget {
                       children: [
                         const Text(
                           'Updated: ',
-                          style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12, color: Colors.grey),
+                          style: TextStyle(
+                            fontWeight: FontWeight.bold,
+                            fontSize: 12,
+                            color: Colors.grey,
+                          ),
                         ),
                         Text(
                           _formatDate(updatedAt.toString()),
-                          style: const TextStyle(fontSize: 12, color: Colors.grey),
+                          style: const TextStyle(
+                            fontSize: 12,
+                            color: Colors.grey,
+                          ),
                         ),
                       ],
                     ),
@@ -471,7 +531,7 @@ class ExerciseTile extends StatelessWidget {
       },
     );
   }
-  
+
   String _formatDate(String dateString) {
     try {
       final date = DateTime.parse(dateString);
