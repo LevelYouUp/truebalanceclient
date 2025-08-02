@@ -373,6 +373,18 @@ class _MessageInputWidgetState extends State<MessageInputWidget> {
                                   {};
                               final msg = data['message'] ?? '';
                               final ts = data['timestamp'] ?? '';
+                              // Robustly parse fromAdmin field
+                              bool fromAdmin = false;
+                              if (data.containsKey('fromAdmin')) {
+                                final raw = data['fromAdmin'];
+                                if (raw is bool) {
+                                  fromAdmin = raw;
+                                } else if (raw is String) {
+                                  fromAdmin = raw.toLowerCase() == 'true';
+                                } else if (raw is int) {
+                                  fromAdmin = raw == 1;
+                                }
+                              }
                               DateTime? dt;
                               if (ts is Timestamp) {
                                 dt = ts.toDate();
@@ -385,10 +397,96 @@ class _MessageInputWidgetState extends State<MessageInputWidget> {
                                   dt != null
                                       ? '${dt.year}-${dt.month.toString().padLeft(2, '0')}-${dt.day.toString().padLeft(2, '0')} ${dt.hour.toString().padLeft(2, '0')}:${dt.minute.toString().padLeft(2, '0')}'
                                       : ts.toString();
-                              return ListTile(
-                                title: Text(msg),
-                                subtitle: Text('Sent: $formatted'),
-                              );
+                              if (fromAdmin) {
+                                // Admin message: left-aligned, blue background
+                                return Align(
+                                  alignment: Alignment.centerLeft,
+                                  child: Container(
+                                    margin: const EdgeInsets.symmetric(
+                                      vertical: 2,
+                                      horizontal: 8,
+                                    ),
+                                    padding: const EdgeInsets.symmetric(
+                                      vertical: 6,
+                                      horizontal: 12,
+                                    ),
+                                    decoration: BoxDecoration(
+                                      color: Colors.blue[50],
+                                      borderRadius: BorderRadius.circular(12),
+                                      border: Border.all(
+                                        color: Colors.blue,
+                                        width: 0.5,
+                                      ),
+                                    ),
+                                    child: RichText(
+                                      text: TextSpan(
+                                        style: const TextStyle(
+                                          fontSize: 14,
+                                          color: Colors.black,
+                                        ),
+                                        children: [
+                                          TextSpan(
+                                            text: msg.isEmpty ? '(nudge)' : msg,
+                                          ),
+                                          TextSpan(
+                                            text:
+                                                ' sent by Admin at $formatted',
+                                            style: const TextStyle(
+                                              fontSize: 12,
+                                              color: Colors.blue,
+                                              fontStyle: FontStyle.italic,
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                  ),
+                                );
+                              } else {
+                                // User message: right-aligned, purple background
+                                return Align(
+                                  alignment: Alignment.centerRight,
+                                  child: Container(
+                                    margin: const EdgeInsets.symmetric(
+                                      vertical: 2,
+                                      horizontal: 8,
+                                    ),
+                                    padding: const EdgeInsets.symmetric(
+                                      vertical: 6,
+                                      horizontal: 12,
+                                    ),
+                                    decoration: BoxDecoration(
+                                      color: Colors.deepPurple[50],
+                                      borderRadius: BorderRadius.circular(12),
+                                      border: Border.all(
+                                        color: Colors.deepPurple,
+                                        width: 0.5,
+                                      ),
+                                    ),
+                                    child: RichText(
+                                      text: TextSpan(
+                                        style: const TextStyle(
+                                          fontSize: 14,
+                                          color: Colors.black,
+                                        ),
+                                        children: [
+                                          TextSpan(
+                                            text: msg.isEmpty ? '(nudge)' : msg,
+                                          ),
+                                          TextSpan(
+                                            text: ' sent by You at $formatted',
+                                            style: const TextStyle(
+                                              fontSize: 12,
+                                              color: Colors.deepPurple,
+                                              fontStyle: FontStyle.italic,
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                  ),
+                                );
+                              }
                             },
                           );
                         },
@@ -408,136 +506,115 @@ class _MessageInputWidgetState extends State<MessageInputWidget> {
                             docs[idx].data() as Map<String, dynamic>? ?? {};
                         final msg = data['message'] ?? '';
                         final ts = data['timestamp'] ?? '';
-                        final fromAdminRaw = data['fromAdmin'];
-                        final fromAdmin =
-                            fromAdminRaw == true ||
-                            (fromAdminRaw is String &&
-                                fromAdminRaw.toLowerCase() == 'true');
+                        // Robustly parse fromAdmin field
+                        bool fromAdmin = false;
+                        if (data.containsKey('fromAdmin')) {
+                          final raw = data['fromAdmin'];
+                          if (raw is bool) {
+                            fromAdmin = raw;
+                          } else if (raw is String) {
+                            fromAdmin = raw.toLowerCase() == 'true';
+                          } else if (raw is int) {
+                            fromAdmin = raw == 1;
+                          }
+                        }
                         DateTime? dt;
-                        try {
-                          dt = DateTime.parse(ts);
-                        } catch (_) {}
+                        if (ts is Timestamp) {
+                          dt = ts.toDate();
+                        } else if (ts is String) {
+                          try {
+                            dt = DateTime.parse(ts);
+                          } catch (_) {}
+                        }
                         final formatted =
                             dt != null
                                 ? '${dt.year}-${dt.month.toString().padLeft(2, '0')}-${dt.day.toString().padLeft(2, '0')} ${dt.hour.toString().padLeft(2, '0')}:${dt.minute.toString().padLeft(2, '0')}'
-                                : ts;
+                                : ts.toString();
                         if (fromAdmin) {
-                          // Admin message: left-aligned, blue bubble, 'Received'
+                          // Admin message: left-aligned, blue background
                           return Align(
                             alignment: Alignment.centerLeft,
                             child: Container(
                               margin: const EdgeInsets.symmetric(
-                                vertical: 4,
+                                vertical: 2,
                                 horizontal: 8,
                               ),
-                              padding: const EdgeInsets.all(12),
+                              padding: const EdgeInsets.symmetric(
+                                vertical: 6,
+                                horizontal: 12,
+                              ),
                               decoration: BoxDecoration(
                                 color: Colors.blue[50],
-                                borderRadius: const BorderRadius.only(
-                                  topRight: Radius.circular(16),
-                                  bottomRight: Radius.circular(16),
-                                  topLeft: Radius.circular(4),
-                                  bottomLeft: Radius.circular(16),
+                                borderRadius: BorderRadius.circular(12),
+                                border: Border.all(
+                                  color: Colors.blue,
+                                  width: 0.5,
                                 ),
-                                border: Border.all(color: Colors.blue),
                               ),
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Row(
-                                    children: [
-                                      const Icon(
-                                        Icons.admin_panel_settings,
+                              child: RichText(
+                                text: TextSpan(
+                                  style: const TextStyle(
+                                    fontSize: 14,
+                                    color: Colors.black,
+                                  ),
+                                  children: [
+                                    TextSpan(
+                                      text: msg.isEmpty ? '(nudge)' : msg,
+                                    ),
+                                    TextSpan(
+                                      text: ', sent by Admin at $formatted',
+                                      style: const TextStyle(
+                                        fontSize: 12,
                                         color: Colors.blue,
-                                        size: 18,
+                                        fontStyle: FontStyle.italic,
                                       ),
-                                      const SizedBox(width: 6),
-                                      Text(
-                                        'Admin',
-                                        style: const TextStyle(
-                                          fontWeight: FontWeight.bold,
-                                          color: Colors.blue,
-                                        ),
-                                      ),
-                                    ],
-                                  ),
-                                  const SizedBox(height: 4),
-                                  Text(
-                                    msg,
-                                    style: const TextStyle(
-                                      color: Colors.blue,
-                                      fontWeight: FontWeight.bold,
                                     ),
-                                  ),
-                                  const SizedBox(height: 2),
-                                  Text(
-                                    'Received: $formatted',
-                                    style: const TextStyle(
-                                      fontSize: 12,
-                                      color: Colors.blue,
-                                    ),
-                                  ),
-                                ],
+                                  ],
+                                ),
                               ),
                             ),
                           );
                         } else {
-                          // User message: right-aligned, purple bubble, 'Sent'
+                          // User message: right-aligned, purple background
                           return Align(
                             alignment: Alignment.centerRight,
                             child: Container(
                               margin: const EdgeInsets.symmetric(
-                                vertical: 4,
+                                vertical: 2,
                                 horizontal: 8,
                               ),
-                              padding: const EdgeInsets.all(12),
+                              padding: const EdgeInsets.symmetric(
+                                vertical: 6,
+                                horizontal: 12,
+                              ),
                               decoration: BoxDecoration(
                                 color: Colors.deepPurple[50],
-                                borderRadius: const BorderRadius.only(
-                                  topLeft: Radius.circular(16),
-                                  bottomLeft: Radius.circular(16),
-                                  topRight: Radius.circular(4),
-                                  bottomRight: Radius.circular(16),
+                                borderRadius: BorderRadius.circular(12),
+                                border: Border.all(
+                                  color: Colors.deepPurple,
+                                  width: 0.5,
                                 ),
-                                border: Border.all(color: Colors.deepPurple),
                               ),
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.end,
-                                children: [
-                                  Row(
-                                    mainAxisAlignment: MainAxisAlignment.end,
-                                    children: [
-                                      Text(
-                                        'You',
-                                        style: const TextStyle(
-                                          fontWeight: FontWeight.bold,
-                                          color: Colors.deepPurple,
-                                        ),
-                                      ),
-                                      const SizedBox(width: 6),
-                                      const Icon(
-                                        Icons.person,
+                              child: RichText(
+                                text: TextSpan(
+                                  style: const TextStyle(
+                                    fontSize: 14,
+                                    color: Colors.black,
+                                  ),
+                                  children: [
+                                    TextSpan(
+                                      text: msg.isEmpty ? '(nudge)' : msg,
+                                    ),
+                                    TextSpan(
+                                      text: ', sent by You at $formatted',
+                                      style: const TextStyle(
+                                        fontSize: 12,
                                         color: Colors.deepPurple,
-                                        size: 18,
+                                        fontStyle: FontStyle.italic,
                                       ),
-                                    ],
-                                  ),
-                                  const SizedBox(height: 4),
-                                  Text(
-                                    msg,
-                                    style: const TextStyle(
-                                      color: Colors.deepPurple,
                                     ),
-                                  ),
-                                  const SizedBox(height: 2),
-                                  Text(
-                                    'Sent: $formatted',
-                                    style: const TextStyle(
-                                      fontSize: 12,
-                                      color: Colors.deepPurple,
-                                    ),
-                                  ),
-                                ],
+                                  ],
+                                ),
                               ),
                             ),
                           );
