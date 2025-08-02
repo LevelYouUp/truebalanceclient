@@ -34,14 +34,33 @@ class AuthGate extends StatelessWidget {
       builder: (context, snapshot) {
         final user = snapshot.data;
         if (user != null) {
-          // Add user to Firestore users table if not present
-          FirebaseFirestore.instance.collection('users').doc(user.uid).set({
-            'name': user.displayName ?? '',
-            'contact': user.email ?? '',
-            'contactType': 'email',
-            'notes': '',
-            'planIds': [],
-          }, SetOptions(merge: true));
+          // Add user to Firestore users table if not present, but don't overwrite existing planIds or assigned names
+          final userRef = FirebaseFirestore.instance.collection('users').doc(user.uid);
+          userRef.get().then((doc) {
+            if (!doc.exists) {
+              // Only create new user document if it doesn't exist
+              userRef.set({
+                'name': user.displayName ?? '',
+                'contact': user.email ?? '',
+                'contactType': 'email',
+                'notes': '',
+                'planIds': [],
+              });
+            } else {
+              // User exists, only update contact info without touching planIds or name
+              Map<String, dynamic> updateData = {
+                'contact': user.email ?? '',
+                'contactType': 'email',
+              };
+              // Only update name if user has a display name and current name is empty
+              final currentData = doc.data() ?? {};
+              final currentName = currentData['name'] ?? '';
+              if (user.displayName != null && user.displayName!.isNotEmpty && currentName.isEmpty) {
+                updateData['name'] = user.displayName!;
+              }
+              userRef.set(updateData, SetOptions(merge: true));
+            }
+          });
         }
         if (!snapshot.hasData) {
           return ui.SignInScreen(providers: [ui.EmailAuthProvider()]);
@@ -119,9 +138,43 @@ class HomeScreen extends StatelessWidget {
               ),
             );
           }
-          return ListView(
-            children:
-                planIds.map((planId) => PlanTile(planId: planId)).toList(),
+          return Column(
+            children: [
+              Expanded(
+                child: ListView(
+                  children:
+                      planIds.map((planId) => PlanTile(planId: planId)).toList(),
+                ),
+              ),
+              Padding(
+                padding: const EdgeInsets.all(16.0),
+                child: Column(
+                  children: [
+                    ElevatedButton.icon(
+                      icon: const Icon(Icons.notifications_active),
+                      label: const Text('Send me a Nudge'),
+                      onPressed: () async {
+                        final now = DateTime.now();
+                        await FirebaseFirestore.instance
+                            .collection('users')
+                            .doc(user.uid)
+                            .set({
+                              'nudge': 1,
+                              'lastNudge': now.toIso8601String(),
+                            }, SetOptions(merge: true));
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          SnackBar(
+                            content: Text('Nudge sent at ${now.toLocal()}'),
+                          ),
+                        );
+                      },
+                    ),
+                    const SizedBox(height: 8),
+                    MessageInputWidget(user: user),
+                  ],
+                ),
+              ),
+            ],
           );
         },
       ),
@@ -143,10 +196,44 @@ class PlanTile extends StatelessWidget {
       builder: (context, snapshot) {
         if (!snapshot.hasData) return ListTile(title: const Text('Loading...'));
         final plan = snapshot.data!.data() as Map<String, dynamic>? ?? {};
-        final exerciseIds = List<String>.from(plan['exerciseIds'] ?? []);
+        
+        // Handle both old and new data structures
+        List<String> exerciseIds = [];
+        
+        // Check for new structure first (exercises array with exerciseId objects)
+        if (plan.containsKey('exercises') && plan['exercises'] is List) {
+          final exercisesList = List<Map<String, dynamic>>.from(
+            (plan['exercises'] as List).map((e) => e as Map<String, dynamic>)
+          );
+          
+          // Sort by sortOrder if available
+          exercisesList.sort((a, b) {
+            final aOrder = a['sortOrder'] ?? 0;
+            final bOrder = b['sortOrder'] ?? 0;
+            return (aOrder as num).compareTo(bOrder as num);
+          });
+          
+          // Extract exerciseIds from the sorted list
+          exerciseIds = exercisesList
+              .map((exercise) => exercise['exerciseId'] as String?)
+              .where((id) => id != null)
+              .cast<String>()
+              .toList();
+        }
+        // Fallback to old structure (simple exerciseIds array)
+        else if (plan.containsKey('exerciseIds') && plan['exerciseIds'] is List) {
+          exerciseIds = List<String>.from(plan['exerciseIds'] ?? []);
+        }
+        
+        // Debug logging to help identify the issue
+        print('Plan data: $plan');
+        print('Exercise IDs found: $exerciseIds');
+        
         return ExpansionTile(
           title: Text(plan['name'] ?? 'Unnamed Plan'),
-          // Removed subtitle (description)
+          subtitle: exerciseIds.isEmpty 
+              ? const Text('No exercises found', style: TextStyle(color: Colors.red, fontSize: 12))
+              : Text('${exerciseIds.length} exercise(s)', style: const TextStyle(fontSize: 12)),
           children:
               exerciseIds.map((id) => ExerciseTile(exerciseId: id)).toList(),
         );
@@ -169,14 +256,229 @@ class ExerciseTile extends StatelessWidget {
       builder: (context, snapshot) {
         if (!snapshot.hasData) return ListTile(title: const Text('Loading...'));
         final exercise = snapshot.data!.data() as Map<String, dynamic>? ?? {};
-        final frequency = exercise['Frequency'] ?? 'N/A';
-        final duration = exercise['Duration'] ?? 'N/A';
-        return ListTile(
-          title: Text(exercise['title'] ?? 'Unnamed Exercise'),
-          subtitle: Text('Frequency: $frequency   Duration: $duration'),
+        final title = exercise['title'] ?? 'Unnamed Exercise';
+        final description = exercise['description'];
+        final recommendedReps = exercise['recommendedRepetitions'];
+        final videoUrl = exercise['videoUrl'];
+        final createdAt = exercise['createdAt'];
+        final updatedAt = exercise['updatedAt'];
+        
+        // Build subtitle with available info
+        List<String> subtitleParts = [];
+        if (recommendedReps != null && recommendedReps.toString().isNotEmpty) {
+          subtitleParts.add('Reps: $recommendedReps');
+        }
+        if (description != null && description.toString().isNotEmpty) {
+          // Show first 50 characters of description
+          String shortDesc = description.toString();
+          if (shortDesc.length > 50) {
+            shortDesc = '${shortDesc.substring(0, 50)}...';
+          }
+          subtitleParts.add(shortDesc);
+        }
+        
+        return ExpansionTile(
+          title: Text(title),
+          subtitle: subtitleParts.isNotEmpty 
+              ? Text(subtitleParts.join(' • '), style: const TextStyle(fontSize: 12))
+              : null,
+          trailing: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              // Last check-in display and Did it button
+              StreamBuilder<QuerySnapshot>(
+                stream: FirebaseFirestore.instance
+                    .collection('exercise_check_ins')
+                    .where('userId', isEqualTo: FirebaseAuth.instance.currentUser?.uid)
+                    .where('exerciseId', isEqualTo: exerciseId)
+                    .snapshots(),
+                builder: (context, snapshot) {
+                  DateTime? lastCheckIn;
+                  bool doneToday = false;
+                  
+                  if (snapshot.hasData && snapshot.data!.docs.isNotEmpty) {
+                    // Sort by timestamp descending to get the latest
+                    final docs = snapshot.data!.docs;
+                    docs.sort((a, b) {
+                      final aData = a.data() as Map<String, dynamic>;
+                      final bData = b.data() as Map<String, dynamic>;
+                      final aTs = aData['timestamp'];
+                      final bTs = bData['timestamp'];
+                      
+                      DateTime? aDt, bDt;
+                      if (aTs is Timestamp) aDt = aTs.toDate();
+                      if (bTs is Timestamp) bDt = bTs.toDate();
+                      
+                      if (aDt == null && bDt == null) return 0;
+                      if (aDt == null) return 1;
+                      if (bDt == null) return -1;
+                      return bDt.compareTo(aDt);
+                    });
+                    
+                    final latestDoc = docs.first;
+                    final latestData = latestDoc.data() as Map<String, dynamic>;
+                    final timestamp = latestData['timestamp'];
+                    
+                    if (timestamp is Timestamp) {
+                      lastCheckIn = timestamp.toDate();
+                    }
+                    
+                    // Check if done today
+                    if (lastCheckIn != null) {
+                      final now = DateTime.now();
+                      doneToday = lastCheckIn.year == now.year &&
+                                  lastCheckIn.month == now.month &&
+                                  lastCheckIn.day == now.day;
+                    }
+                  }
+                  
+                  return Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      // Last check-in display
+                      if (lastCheckIn != null) ...[
+                        Text(
+                          doneToday ? 'Last Done: Today!' : 'Last: ${lastCheckIn.month}/${lastCheckIn.day} ${lastCheckIn.hour.toString().padLeft(2, '0')}:${lastCheckIn.minute.toString().padLeft(2, '0')}',
+                          style: TextStyle(
+                            fontSize: 10,
+                            color: doneToday ? Colors.grey : Colors.green,
+                            fontWeight: doneToday ? FontWeight.bold : FontWeight.normal,
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                      ],
+                      // Did it button
+                      ElevatedButton(
+                        onPressed: () async {
+                          final user = FirebaseAuth.instance.currentUser;
+                          if (user != null) {
+                            await FirebaseFirestore.instance
+                                .collection('exercise_check_ins')
+                                .add({
+                              'userId': user.uid,
+                              'exerciseId': exerciseId,
+                              'timestamp': FieldValue.serverTimestamp(),
+                            });
+                          }
+                        },
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: doneToday ? Colors.grey : Colors.green,
+                          foregroundColor: Colors.white,
+                          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+                          minimumSize: const Size(60, 30),
+                        ),
+                        child: Text(
+                          'Did it!',
+                          style: TextStyle(
+                            fontSize: 12,
+                            fontStyle: doneToday ? FontStyle.italic : FontStyle.normal,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      const Icon(Icons.expand_more),
+                    ],
+                  );
+                },
+              ),
+            ],
+          ),
+          children: [
+            Padding(
+              padding: const EdgeInsets.all(16.0),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  if (description != null && description.toString().isNotEmpty) ...[
+                    const Text(
+                      'Description:',
+                      style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      description.toString(),
+                      style: const TextStyle(fontSize: 13),
+                    ),
+                    const SizedBox(height: 12),
+                  ],
+                  if (recommendedReps != null && recommendedReps.toString().isNotEmpty) ...[
+                    Row(
+                      children: [
+                        const Text(
+                          'Recommended Repetitions: ',
+                          style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
+                        ),
+                        Text(
+                          recommendedReps.toString(),
+                          style: const TextStyle(fontSize: 13),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 8),
+                  ],
+                  if (videoUrl != null && videoUrl.toString().isNotEmpty) ...[
+                    Row(
+                      children: [
+                        const Text(
+                          'Video URL: ',
+                          style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
+                        ),
+                        Expanded(
+                          child: Text(
+                            videoUrl.toString(),
+                            style: const TextStyle(fontSize: 13, color: Colors.blue),
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 8),
+                  ],
+                  if (createdAt != null && createdAt.toString().isNotEmpty) ...[
+                    Row(
+                      children: [
+                        const Text(
+                          'Created: ',
+                          style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12, color: Colors.grey),
+                        ),
+                        Text(
+                          _formatDate(createdAt.toString()),
+                          style: const TextStyle(fontSize: 12, color: Colors.grey),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 4),
+                  ],
+                  if (updatedAt != null && updatedAt.toString().isNotEmpty) ...[
+                    Row(
+                      children: [
+                        const Text(
+                          'Updated: ',
+                          style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12, color: Colors.grey),
+                        ),
+                        Text(
+                          _formatDate(updatedAt.toString()),
+                          style: const TextStyle(fontSize: 12, color: Colors.grey),
+                        ),
+                      ],
+                    ),
+                  ],
+                ],
+              ),
+            ),
+          ],
         );
       },
     );
+  }
+  
+  String _formatDate(String dateString) {
+    try {
+      final date = DateTime.parse(dateString);
+      return '${date.year}-${date.month.toString().padLeft(2, '0')}-${date.day.toString().padLeft(2, '0')}';
+    } catch (e) {
+      return dateString;
+    }
   }
 }
 
@@ -288,13 +590,14 @@ class _MessageInputWidgetState extends State<MessageInputWidget> {
                   ),
                 ],
               ),
-              const SizedBox(height: 16),
+              const SizedBox(height: 12),
               Text(
                 'Message History:',
                 style: Theme.of(context).textTheme.titleMedium,
               ),
+              const SizedBox(height: 8),
               SizedBox(
-                height: 180,
+                height: 300, // Fixed height instead of Expanded
                 child: StreamBuilder<QuerySnapshot>(
                   stream:
                       FirebaseFirestore.instance
