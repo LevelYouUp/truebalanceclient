@@ -1,0 +1,557 @@
+import 'package:flutter/material.dart';
+import 'package:firebase_core/firebase_core.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+import 'package:firebase_ui_auth/firebase_ui_auth.dart' as ui;
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'firebase_options.dart';
+
+void main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
+  runApp(const MyApp());
+}
+
+class MyApp extends StatelessWidget {
+  const MyApp({super.key});
+  @override
+  Widget build(BuildContext context) {
+    return MaterialApp(
+      title: 'TrueBalance Client',
+      theme: ThemeData(
+        colorScheme: ColorScheme.fromSeed(seedColor: Colors.deepPurple),
+      ),
+      home: const AuthGate(),
+    );
+  }
+}
+
+class AuthGate extends StatelessWidget {
+  const AuthGate({super.key});
+  @override
+  Widget build(BuildContext context) {
+    return StreamBuilder<User?>(
+      stream: FirebaseAuth.instance.authStateChanges(),
+      builder: (context, snapshot) {
+        final user = snapshot.data;
+        if (user != null) {
+          // Add user to Firestore users table if not present
+          FirebaseFirestore.instance.collection('users').doc(user.uid).set({
+            'name': user.displayName ?? '',
+            'contact': user.email ?? '',
+            'contactType': 'email',
+            'notes': '',
+            'planIds': [],
+          }, SetOptions(merge: true));
+        }
+        if (!snapshot.hasData) {
+          return ui.SignInScreen(providers: [ui.EmailAuthProvider()]);
+        }
+        return const HomeScreen();
+      },
+    );
+  }
+}
+
+class HomeScreen extends StatelessWidget {
+  const HomeScreen({super.key});
+  @override
+  Widget build(BuildContext context) {
+    final user = FirebaseAuth.instance.currentUser!;
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('My Exercise Plans'),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.logout),
+            tooltip: 'Log out',
+            onPressed: () async {
+              await FirebaseAuth.instance.signOut();
+            },
+          ),
+        ],
+      ),
+      body: StreamBuilder<DocumentSnapshot>(
+        stream:
+            FirebaseFirestore.instance
+                .collection('users')
+                .doc(user.uid)
+                .snapshots(),
+        builder: (context, snapshot) {
+          if (!snapshot.hasData) {
+            return const Center(child: CircularProgressIndicator());
+          }
+          final userData = snapshot.data!.data() as Map<String, dynamic>? ?? {};
+          final planIds = List<String>.from(userData['planIds'] ?? []);
+          if (planIds.isEmpty) {
+            return Center(
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  const Icon(Icons.info_outline, size: 64, color: Colors.grey),
+                  const SizedBox(height: 16),
+                  const Text(
+                    'You have no assigned plans yet.',
+                    style: TextStyle(fontSize: 20, color: Colors.grey),
+                  ),
+                  const SizedBox(height: 24),
+                  ElevatedButton.icon(
+                    icon: const Icon(Icons.notifications_active),
+                    label: const Text('Send me a Nudge'),
+                    onPressed: () async {
+                      final now = DateTime.now();
+                      await FirebaseFirestore.instance
+                          .collection('users')
+                          .doc(user.uid)
+                          .set({
+                            'nudge': 1,
+                            'lastNudge': now.toIso8601String(),
+                          }, SetOptions(merge: true));
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(
+                          content: Text('Nudge sent at ${now.toLocal()}'),
+                        ),
+                      );
+                    },
+                  ),
+                  const SizedBox(height: 16),
+                  MessageInputWidget(user: user),
+                ],
+              ),
+            );
+          }
+          return ListView(
+            children:
+                planIds.map((planId) => PlanTile(planId: planId)).toList(),
+          );
+        },
+      ),
+    );
+  }
+}
+
+class PlanTile extends StatelessWidget {
+  final String planId;
+  const PlanTile({super.key, required this.planId});
+  @override
+  Widget build(BuildContext context) {
+    return StreamBuilder<DocumentSnapshot>(
+      stream:
+          FirebaseFirestore.instance
+              .collection('plans')
+              .doc(planId)
+              .snapshots(),
+      builder: (context, snapshot) {
+        if (!snapshot.hasData) return ListTile(title: const Text('Loading...'));
+        final plan = snapshot.data!.data() as Map<String, dynamic>? ?? {};
+        final exerciseIds = List<String>.from(plan['exerciseIds'] ?? []);
+        return ExpansionTile(
+          title: Text(plan['name'] ?? 'Unnamed Plan'),
+          // Removed subtitle (description)
+          children:
+              exerciseIds.map((id) => ExerciseTile(exerciseId: id)).toList(),
+        );
+      },
+    );
+  }
+}
+
+class ExerciseTile extends StatelessWidget {
+  final String exerciseId;
+  const ExerciseTile({super.key, required this.exerciseId});
+  @override
+  Widget build(BuildContext context) {
+    return StreamBuilder<DocumentSnapshot>(
+      stream:
+          FirebaseFirestore.instance
+              .collection('exercises')
+              .doc(exerciseId)
+              .snapshots(),
+      builder: (context, snapshot) {
+        if (!snapshot.hasData) return ListTile(title: const Text('Loading...'));
+        final exercise = snapshot.data!.data() as Map<String, dynamic>? ?? {};
+        final frequency = exercise['Frequency'] ?? 'N/A';
+        final duration = exercise['Duration'] ?? 'N/A';
+        return ListTile(
+          title: Text(exercise['title'] ?? 'Unnamed Exercise'),
+          subtitle: Text('Frequency: $frequency   Duration: $duration'),
+        );
+      },
+    );
+  }
+}
+
+// MessageInputWidget for user message input
+class MessageInputWidget extends StatefulWidget {
+  final User user;
+  const MessageInputWidget({super.key, required this.user});
+  @override
+  State<MessageInputWidget> createState() => _MessageInputWidgetState();
+}
+
+class _MessageInputWidgetState extends State<MessageInputWidget> {
+  bool showInput = false;
+  final TextEditingController _controller = TextEditingController();
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  void _reset() {
+    _controller.clear();
+    setState(() {
+      showInput = false;
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    List<Widget> children = [];
+    if (!showInput) {
+      children.add(
+        ElevatedButton.icon(
+          icon: const Icon(Icons.message),
+          label: const Text('Send me a message'),
+          onPressed: () {
+            setState(() {
+              showInput = true;
+            });
+          },
+        ),
+      );
+    }
+    if (showInput) {
+      children.add(
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 24.0),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              TextField(
+                controller: _controller,
+                decoration: const InputDecoration(
+                  labelText: 'Type your message',
+                  border: OutlineInputBorder(),
+                ),
+                minLines: 1,
+                maxLines: 3,
+              ),
+              const SizedBox(height: 8),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  ElevatedButton(
+                    child: const Text('Send'),
+                    onPressed: () async {
+                      final text = _controller.text.trim();
+                      final now = DateTime.now();
+                      if (text.isNotEmpty) {
+                        await FirebaseFirestore.instance
+                            .collection('messages')
+                            .add({
+                              'userId': widget.user.uid,
+                              'timestamp': now.toIso8601String(),
+                              'message': text,
+                            });
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(content: Text('Message sent!')),
+                        );
+                      } else {
+                        // Blank message is a nudge
+                        await FirebaseFirestore.instance
+                            .collection('messages')
+                            .add({
+                              'userId': widget.user.uid,
+                              'timestamp': now.toIso8601String(),
+                              'message': '',
+                            });
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(content: Text('Nudge sent!')),
+                        );
+                      }
+                      // Set nudge in users table for both cases
+                      await FirebaseFirestore.instance
+                          .collection('users')
+                          .doc(widget.user.uid)
+                          .set({
+                            'nudge': 1,
+                            'lastNudge': now.toIso8601String(),
+                          }, SetOptions(merge: true));
+                      _reset();
+                    },
+                  ),
+                  const SizedBox(width: 16),
+                  OutlinedButton(
+                    child: const Text('Cancel'),
+                    onPressed: _reset,
+                  ),
+                ],
+              ),
+              const SizedBox(height: 16),
+              Text(
+                'Message History:',
+                style: Theme.of(context).textTheme.titleMedium,
+              ),
+              SizedBox(
+                height: 180,
+                child: StreamBuilder<QuerySnapshot>(
+                  stream:
+                      FirebaseFirestore.instance
+                          .collection('messages')
+                          .where('userId', isEqualTo: widget.user.uid)
+                          .orderBy('timestamp', descending: true)
+                          .snapshots(),
+                  builder: (context, snapshot) {
+                    if (snapshot.connectionState == ConnectionState.waiting) {
+                      return const Center(child: CircularProgressIndicator());
+                    }
+                    if (snapshot.hasError) {
+                      // If Firestore index error, fallback to unordered
+                      return StreamBuilder<QuerySnapshot>(
+                        stream:
+                            FirebaseFirestore.instance
+                                .collection('messages')
+                                .where('userId', isEqualTo: widget.user.uid)
+                                .snapshots(),
+                        builder: (context, snap2) {
+                          if (snap2.connectionState ==
+                              ConnectionState.waiting) {
+                            return const Center(
+                              child: CircularProgressIndicator(),
+                            );
+                          }
+                          if (!snap2.hasData) {
+                            return const Text('No messages found.');
+                          }
+                          final docs =
+                              snap2.data!.docs
+                                  .where(
+                                    (d) =>
+                                        (d.data()
+                                            as Map<
+                                              String,
+                                              dynamic
+                                            >?)?['timestamp'] !=
+                                        null,
+                                  )
+                                  .toList();
+                          if (docs.isEmpty) {
+                            return const Text('No messages sent yet.');
+                          }
+                          docs.sort((a, b) {
+                            dynamic ta =
+                                (a.data() as Map<String, dynamic>)['timestamp'];
+                            dynamic tb =
+                                (b.data() as Map<String, dynamic>)['timestamp'];
+                            DateTime? dta;
+                            DateTime? dtb;
+                            if (ta is Timestamp) {
+                              dta = ta.toDate();
+                            } else if (ta is String) {
+                              try {
+                                dta = DateTime.parse(ta);
+                              } catch (_) {}
+                            }
+                            if (tb is Timestamp) {
+                              dtb = tb.toDate();
+                            } else if (tb is String) {
+                              try {
+                                dtb = DateTime.parse(tb);
+                              } catch (_) {}
+                            }
+                            if (dtb == null && dta == null) return 0;
+                            if (dtb == null) return -1;
+                            if (dta == null) return 1;
+                            return dtb.compareTo(dta);
+                          });
+                          return ListView.builder(
+                            itemCount: docs.length,
+                            itemBuilder: (context, idx) {
+                              final data =
+                                  docs[idx].data() as Map<String, dynamic>? ??
+                                  {};
+                              final msg = data['message'] ?? '';
+                              final ts = data['timestamp'] ?? '';
+                              DateTime? dt;
+                              if (ts is Timestamp) {
+                                dt = ts.toDate();
+                              } else if (ts is String) {
+                                try {
+                                  dt = DateTime.parse(ts);
+                                } catch (_) {}
+                              }
+                              final formatted =
+                                  dt != null
+                                      ? '${dt.year}-${dt.month.toString().padLeft(2, '0')}-${dt.day.toString().padLeft(2, '0')} ${dt.hour.toString().padLeft(2, '0')}:${dt.minute.toString().padLeft(2, '0')}'
+                                      : ts.toString();
+                              return ListTile(
+                                title: Text(msg),
+                                subtitle: Text('Sent: $formatted'),
+                              );
+                            },
+                          );
+                        },
+                      );
+                    }
+                    if (!snapshot.hasData) {
+                      return const Text('No messages found.');
+                    }
+                    final docs = snapshot.data!.docs;
+                    if (docs.isEmpty) {
+                      return const Text('No messages sent yet.');
+                    }
+                    return ListView.builder(
+                      itemCount: docs.length,
+                      itemBuilder: (context, idx) {
+                        final data =
+                            docs[idx].data() as Map<String, dynamic>? ?? {};
+                        final msg = data['message'] ?? '';
+                        final ts = data['timestamp'] ?? '';
+                        final fromAdminRaw = data['fromAdmin'];
+                        final fromAdmin =
+                            fromAdminRaw == true ||
+                            (fromAdminRaw is String &&
+                                fromAdminRaw.toLowerCase() == 'true');
+                        DateTime? dt;
+                        try {
+                          dt = DateTime.parse(ts);
+                        } catch (_) {}
+                        final formatted =
+                            dt != null
+                                ? '${dt.year}-${dt.month.toString().padLeft(2, '0')}-${dt.day.toString().padLeft(2, '0')} ${dt.hour.toString().padLeft(2, '0')}:${dt.minute.toString().padLeft(2, '0')}'
+                                : ts;
+                        if (fromAdmin) {
+                          // Admin message: left-aligned, blue bubble, 'Received'
+                          return Align(
+                            alignment: Alignment.centerLeft,
+                            child: Container(
+                              margin: const EdgeInsets.symmetric(
+                                vertical: 4,
+                                horizontal: 8,
+                              ),
+                              padding: const EdgeInsets.all(12),
+                              decoration: BoxDecoration(
+                                color: Colors.blue[50],
+                                borderRadius: const BorderRadius.only(
+                                  topRight: Radius.circular(16),
+                                  bottomRight: Radius.circular(16),
+                                  topLeft: Radius.circular(4),
+                                  bottomLeft: Radius.circular(16),
+                                ),
+                                border: Border.all(color: Colors.blue),
+                              ),
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Row(
+                                    children: [
+                                      const Icon(
+                                        Icons.admin_panel_settings,
+                                        color: Colors.blue,
+                                        size: 18,
+                                      ),
+                                      const SizedBox(width: 6),
+                                      Text(
+                                        'Admin',
+                                        style: const TextStyle(
+                                          fontWeight: FontWeight.bold,
+                                          color: Colors.blue,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                  const SizedBox(height: 4),
+                                  Text(
+                                    msg,
+                                    style: const TextStyle(
+                                      color: Colors.blue,
+                                      fontWeight: FontWeight.bold,
+                                    ),
+                                  ),
+                                  const SizedBox(height: 2),
+                                  Text(
+                                    'Received: $formatted',
+                                    style: const TextStyle(
+                                      fontSize: 12,
+                                      color: Colors.blue,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          );
+                        } else {
+                          // User message: right-aligned, purple bubble, 'Sent'
+                          return Align(
+                            alignment: Alignment.centerRight,
+                            child: Container(
+                              margin: const EdgeInsets.symmetric(
+                                vertical: 4,
+                                horizontal: 8,
+                              ),
+                              padding: const EdgeInsets.all(12),
+                              decoration: BoxDecoration(
+                                color: Colors.deepPurple[50],
+                                borderRadius: const BorderRadius.only(
+                                  topLeft: Radius.circular(16),
+                                  bottomLeft: Radius.circular(16),
+                                  topRight: Radius.circular(4),
+                                  bottomRight: Radius.circular(16),
+                                ),
+                                border: Border.all(color: Colors.deepPurple),
+                              ),
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.end,
+                                children: [
+                                  Row(
+                                    mainAxisAlignment: MainAxisAlignment.end,
+                                    children: [
+                                      Text(
+                                        'You',
+                                        style: const TextStyle(
+                                          fontWeight: FontWeight.bold,
+                                          color: Colors.deepPurple,
+                                        ),
+                                      ),
+                                      const SizedBox(width: 6),
+                                      const Icon(
+                                        Icons.person,
+                                        color: Colors.deepPurple,
+                                        size: 18,
+                                      ),
+                                    ],
+                                  ),
+                                  const SizedBox(height: 4),
+                                  Text(
+                                    msg,
+                                    style: const TextStyle(
+                                      color: Colors.deepPurple,
+                                    ),
+                                  ),
+                                  const SizedBox(height: 2),
+                                  Text(
+                                    'Sent: $formatted',
+                                    style: const TextStyle(
+                                      fontSize: 12,
+                                      color: Colors.deepPurple,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          );
+                        }
+                      },
+                    );
+                  },
+                ),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+    return Column(children: children);
+  }
+}
