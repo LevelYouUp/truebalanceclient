@@ -242,6 +242,105 @@ class HomeScreen extends StatelessWidget {
     }
   }
 
+  // Helper method to get unread admin messages count and latest timestamp
+  Future<Map<String, dynamic>> _getUnreadMessageInfo(String userId) async {
+    try {
+      final messagesQuery =
+          await FirebaseFirestore.instance
+              .collection('messages')
+              .where('userId', isEqualTo: userId)
+              .where('fromAdmin', isEqualTo: true)
+              .get();
+
+      final unreadMessages =
+          messagesQuery.docs.where((doc) {
+            final data = doc.data();
+            // Consider unread if read field doesn't exist or is false
+            return !data.containsKey('read') || data['read'] != true;
+          }).toList();
+
+      final unreadCount = unreadMessages.length;
+
+      if (unreadCount == 0) {
+        return {'count': 0, 'latestTimestamp': null};
+      }
+
+      // Find the latest unread message timestamp
+      DateTime? latestTimestamp;
+      for (var doc in unreadMessages) {
+        final data = doc.data();
+        final timestamp = data['timestamp'];
+
+        DateTime? messageTime;
+        if (timestamp is Timestamp) {
+          messageTime = timestamp.toDate();
+        } else if (timestamp is String) {
+          try {
+            messageTime = DateTime.parse(timestamp);
+          } catch (_) {}
+        }
+
+        if (messageTime != null) {
+          if (latestTimestamp == null || messageTime.isAfter(latestTimestamp)) {
+            latestTimestamp = messageTime;
+          }
+        }
+      }
+
+      return {'count': unreadCount, 'latestTimestamp': latestTimestamp};
+    } catch (e) {
+      return {'count': 0, 'latestTimestamp': null};
+    }
+  }
+
+  // Helper method to mark all admin messages as read
+  Future<void> _markAdminMessagesAsRead(String userId) async {
+    try {
+      final unreadMessagesQuery =
+          await FirebaseFirestore.instance
+              .collection('messages')
+              .where('userId', isEqualTo: userId)
+              .where('fromAdmin', isEqualTo: true)
+              .get();
+
+      final batch = FirebaseFirestore.instance.batch();
+
+      for (var doc in unreadMessagesQuery.docs) {
+        final data = doc.data();
+        // Only update if read field doesn't exist or is false
+        if (!data.containsKey('read') || data['read'] != true) {
+          batch.update(doc.reference, {'read': true});
+        }
+      }
+
+      await batch.commit();
+    } catch (e) {
+      // Handle error silently
+    }
+  }
+
+  // Helper method to format time since message
+  String _formatMessageTime(DateTime messageTime) {
+    final now = DateTime.now();
+    final difference = now.difference(messageTime);
+
+    if (difference.inDays >= 1) {
+      return difference.inDays == 1
+          ? 'yesterday'
+          : '${difference.inDays} days ago';
+    } else if (difference.inHours >= 1) {
+      return difference.inHours == 1
+          ? 'an hour ago'
+          : '${difference.inHours} hours ago';
+    } else if (difference.inMinutes >= 5) {
+      return '${difference.inMinutes} minutes ago';
+    } else if (difference.inMinutes >= 1) {
+      return 'a few minutes ago';
+    } else {
+      return 'just now';
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final user = FirebaseAuth.instance.currentUser!;
@@ -395,7 +494,12 @@ class HomeScreen extends StatelessWidget {
                           },
                         ),
                         const SizedBox(height: 16),
-                        MessageInputWidget(user: user),
+                        MessageInputWidget(
+                          user: user,
+                          getUnreadMessageInfo: _getUnreadMessageInfo,
+                          markAdminMessagesAsRead: _markAdminMessagesAsRead,
+                          formatMessageTime: _formatMessageTime,
+                        ),
                       ],
                     ),
                   ),
@@ -548,7 +652,12 @@ class HomeScreen extends StatelessWidget {
                       },
                     ),
                     const SizedBox(height: 8),
-                    MessageInputWidget(user: user),
+                    MessageInputWidget(
+                      user: user,
+                      getUnreadMessageInfo: _getUnreadMessageInfo,
+                      markAdminMessagesAsRead: _markAdminMessagesAsRead,
+                      formatMessageTime: _formatMessageTime,
+                    ),
                   ],
                 ),
               ),
@@ -763,16 +872,50 @@ class ExerciseTile extends StatelessWidget {
                     children: [
                       // Last check-in display
                       if (lastCheckIn != null) ...[
-                        Text(
-                          doneToday
-                              ? 'Last Done: Today!'
-                              : 'Last: ${lastCheckIn.month}/${lastCheckIn.day} ${lastCheckIn.hour.toString().padLeft(2, '0')}:${lastCheckIn.minute.toString().padLeft(2, '0')}',
-                          style: TextStyle(
-                            fontSize: 10,
-                            color: doneToday ? Colors.grey : Colors.green,
-                            fontWeight:
-                                doneToday ? FontWeight.bold : FontWeight.normal,
-                          ),
+                        Builder(
+                          builder: (context) {
+                            final checkIn = lastCheckIn;
+                            if (checkIn == null) return const SizedBox();
+
+                            if (doneToday) {
+                              final now = DateTime.now();
+                              final diff = now.difference(checkIn);
+                              final timeStr =
+                                  '${checkIn.hour.toString().padLeft(2, '0')}:${checkIn.minute.toString().padLeft(2, '0')}';
+
+                              String agoText;
+                              if (diff.inMinutes == 0) {
+                                agoText = 'just now';
+                              } else if (diff.inMinutes < 60) {
+                                agoText = '${diff.inMinutes}m ago';
+                              } else {
+                                final hours = diff.inHours;
+                                final minutes = diff.inMinutes % 60;
+                                if (minutes == 0) {
+                                  agoText = '${hours}h ago';
+                                } else {
+                                  agoText = '${hours}h ${minutes}m ago';
+                                }
+                              }
+
+                              return Text(
+                                'Last Done: Today at $timeStr, $agoText',
+                                style: const TextStyle(
+                                  fontSize: 10,
+                                  color: Colors.grey,
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              );
+                            } else {
+                              return Text(
+                                'Last: ${checkIn.month}/${checkIn.day} ${checkIn.hour.toString().padLeft(2, '0')}:${checkIn.minute.toString().padLeft(2, '0')}',
+                                style: const TextStyle(
+                                  fontSize: 10,
+                                  color: Colors.green,
+                                ),
+                              );
+                            }
+                          },
                         ),
                         const SizedBox(width: 8),
                       ],
@@ -947,7 +1090,18 @@ class ExerciseTile extends StatelessWidget {
 // MessageInputWidget for user message input
 class MessageInputWidget extends StatefulWidget {
   final User user;
-  const MessageInputWidget({super.key, required this.user});
+  final Future<Map<String, dynamic>> Function(String) getUnreadMessageInfo;
+  final Future<void> Function(String) markAdminMessagesAsRead;
+  final String Function(DateTime) formatMessageTime;
+
+  const MessageInputWidget({
+    super.key,
+    required this.user,
+    required this.getUnreadMessageInfo,
+    required this.markAdminMessagesAsRead,
+    required this.formatMessageTime,
+  });
+
   @override
   State<MessageInputWidget> createState() => _MessageInputWidgetState();
 }
@@ -969,18 +1123,142 @@ class _MessageInputWidgetState extends State<MessageInputWidget> {
     });
   }
 
+  // Helper method to mark admin messages as read with time limit
+  Future<void> _markAdminMessagesAsReadWithTimeLimit(
+    DateTime currentTime,
+  ) async {
+    try {
+      final cutoffTime = currentTime.subtract(const Duration(seconds: 1));
+
+      final messagesQuery =
+          await FirebaseFirestore.instance
+              .collection('messages')
+              .where('userId', isEqualTo: widget.user.uid)
+              .where('fromAdmin', isEqualTo: true)
+              .get();
+
+      final batch = FirebaseFirestore.instance.batch();
+
+      for (var doc in messagesQuery.docs) {
+        final data = doc.data();
+
+        // Skip if already read
+        if (data.containsKey('read') && data['read'] == true) {
+          continue;
+        }
+
+        // Check message timestamp
+        final timestamp = data['timestamp'];
+        DateTime? messageTime;
+
+        if (timestamp is Timestamp) {
+          messageTime = timestamp.toDate();
+        } else if (timestamp is String) {
+          try {
+            messageTime = DateTime.parse(timestamp);
+          } catch (_) {}
+        }
+
+        // Only mark as read if message was sent before the cutoff time
+        if (messageTime != null && messageTime.isBefore(cutoffTime)) {
+          batch.update(doc.reference, {'read': true});
+        }
+      }
+
+      await batch.commit();
+    } catch (e) {
+      // Handle error silently
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     List<Widget> children = [];
     if (!showInput) {
       children.add(
-        ElevatedButton.icon(
-          icon: const Icon(Icons.message),
-          label: const Text('Send me a message'),
-          onPressed: () {
-            setState(() {
-              showInput = true;
-            });
+        // Use StreamBuilder to check for unread messages in real-time
+        StreamBuilder<QuerySnapshot>(
+          stream:
+              FirebaseFirestore.instance
+                  .collection('messages')
+                  .where('userId', isEqualTo: widget.user.uid)
+                  .where('fromAdmin', isEqualTo: true)
+                  .snapshots(),
+          builder: (context, snapshot) {
+            int unreadCount = 0;
+            DateTime? latestTimestamp;
+
+            if (snapshot.hasData) {
+              final unreadMessages =
+                  snapshot.data!.docs.where((doc) {
+                    final data = doc.data() as Map<String, dynamic>;
+                    // Consider unread if read field doesn't exist or is false
+                    return !data.containsKey('read') || data['read'] != true;
+                  }).toList();
+
+              unreadCount = unreadMessages.length;
+
+              // Find the latest unread message timestamp
+              for (var doc in unreadMessages) {
+                final data = doc.data() as Map<String, dynamic>;
+                final timestamp = data['timestamp'];
+
+                DateTime? messageTime;
+                if (timestamp is Timestamp) {
+                  messageTime = timestamp.toDate();
+                } else if (timestamp is String) {
+                  try {
+                    messageTime = DateTime.parse(timestamp);
+                  } catch (_) {}
+                }
+
+                if (messageTime != null) {
+                  if (latestTimestamp == null ||
+                      messageTime.isAfter(latestTimestamp)) {
+                    latestTimestamp = messageTime;
+                  }
+                }
+              }
+            }
+
+            String buttonText;
+            if (unreadCount > 0) {
+              final timeText =
+                  latestTimestamp != null
+                      ? widget.formatMessageTime(latestTimestamp)
+                      : 'recently';
+
+              if (unreadCount == 1) {
+                buttonText = '1 New message received ($timeText)';
+              } else {
+                buttonText = '$unreadCount New messages received ($timeText)';
+              }
+            } else {
+              buttonText = 'Send me a message';
+            }
+
+            return ElevatedButton.icon(
+              icon: Icon(
+                unreadCount > 0 ? Icons.mark_email_unread : Icons.message,
+              ),
+              label: Text(buttonText),
+              style:
+                  unreadCount > 0
+                      ? ElevatedButton.styleFrom(
+                        backgroundColor: Colors.orange,
+                        foregroundColor: Colors.white,
+                      )
+                      : null,
+              onPressed: () async {
+                // Mark messages as read when opening
+                if (unreadCount > 0) {
+                  await widget.markAdminMessagesAsRead(widget.user.uid);
+                }
+                setState(() {
+                  showInput = true;
+                });
+              },
+            );
           },
         ),
       );
@@ -1010,6 +1288,10 @@ class _MessageInputWidgetState extends State<MessageInputWidget> {
                     onPressed: () async {
                       final text = _controller.text.trim();
                       final now = DateTime.now();
+
+                      // Mark admin messages as read (excluding those sent within 1 second)
+                      await _markAdminMessagesAsReadWithTimeLimit(now);
+
                       if (text.isNotEmpty) {
                         await FirebaseFirestore.instance
                             .collection('messages')
@@ -1048,7 +1330,13 @@ class _MessageInputWidgetState extends State<MessageInputWidget> {
                   const SizedBox(width: 16),
                   OutlinedButton(
                     child: const Text('Cancel'),
-                    onPressed: _reset,
+                    onPressed: () async {
+                      // Mark admin messages as read (excluding those sent within 1 second)
+                      await _markAdminMessagesAsReadWithTimeLimit(
+                        DateTime.now(),
+                      );
+                      _reset();
+                    },
                   ),
                 ],
               ),
