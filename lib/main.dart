@@ -388,7 +388,7 @@ class HomeScreen extends StatelessWidget {
                             child: Text(
                               name.isNotEmpty
                                   ? 'Hi $name!'
-                                  : 'Hi Anonymous User!',
+                                  : 'Hi Anonymous User! What\'s your name?',
                               style: const TextStyle(
                                 fontSize: 18,
                                 fontWeight: FontWeight.bold,
@@ -522,7 +522,7 @@ class HomeScreen extends StatelessWidget {
                           final greeting =
                               name.isNotEmpty
                                   ? 'Hi $name!'
-                                  : 'Hi Anonymous User!';
+                                  : 'Hi Anonymous User! What\'s your name?';
                           final statusMessage =
                               snapshot.hasData && snapshot.data!.isNotEmpty
                                   ? ' ${snapshot.data!}'
@@ -1301,7 +1301,10 @@ class _MessageInputWidgetState extends State<MessageInputWidget> {
                               'message': text,
                             });
                         ScaffoldMessenger.of(context).showSnackBar(
-                          const SnackBar(content: Text('Message sent!')),
+                          const SnackBar(
+                            content: Text('Message sent!'),
+                            duration: Duration(seconds: 1),
+                          ),
                         );
                       } else {
                         // Blank message is a nudge
