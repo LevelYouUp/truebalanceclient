@@ -77,6 +77,171 @@ class AuthGate extends StatelessWidget {
 
 class HomeScreen extends StatelessWidget {
   const HomeScreen({super.key});
+
+  // Helper method to get all exercise IDs from plans and direct assignments
+  Future<List<String>> _getAllExerciseIds(String userId) async {
+    final userDoc =
+        await FirebaseFirestore.instance.collection('users').doc(userId).get();
+
+    final userData = userDoc.data() ?? {};
+    final planIds = List<String>.from(userData['planIds'] ?? []);
+    final directExerciseIds = List<String>.from(userData['exerciseIds'] ?? []);
+
+    Set<String> allExerciseIds = directExerciseIds.toSet();
+
+    // Get exercises from plans
+    for (String planId in planIds) {
+      final planDoc =
+          await FirebaseFirestore.instance
+              .collection('plans')
+              .doc(planId)
+              .get();
+
+      final planData = planDoc.data() ?? {};
+
+      // Handle both old and new data structures
+      if (planData.containsKey('exercises') && planData['exercises'] is List) {
+        final exercisesList = List<Map<String, dynamic>>.from(
+          (planData['exercises'] as List).map((e) => e as Map<String, dynamic>),
+        );
+        for (var exercise in exercisesList) {
+          if (exercise['exerciseId'] != null) {
+            allExerciseIds.add(exercise['exerciseId'] as String);
+          }
+        }
+      } else if (planData.containsKey('exerciseIds') &&
+          planData['exerciseIds'] is List) {
+        final exerciseIds = List<String>.from(planData['exerciseIds'] ?? []);
+        allExerciseIds.addAll(exerciseIds);
+      }
+    }
+
+    return allExerciseIds.toList();
+  }
+
+  // Helper method to get last check-in time across all exercises
+  Future<DateTime?> _getLastCheckInTime(
+    String userId,
+    List<String> exerciseIds,
+  ) async {
+    if (exerciseIds.isEmpty) return null;
+
+    final checkInsQuery =
+        await FirebaseFirestore.instance
+            .collection('exercise_check_ins')
+            .where('userId', isEqualTo: userId)
+            .where(
+              'exerciseId',
+              whereIn: exerciseIds.take(10).toList(),
+            ) // Firestore limit
+            .get();
+
+    DateTime? latestCheckIn;
+
+    for (var doc in checkInsQuery.docs) {
+      final data = doc.data();
+      final timestamp = data['timestamp'];
+
+      DateTime? checkInTime;
+      if (timestamp is Timestamp) {
+        checkInTime = timestamp.toDate();
+      }
+
+      if (checkInTime != null) {
+        if (latestCheckIn == null || checkInTime.isAfter(latestCheckIn)) {
+          latestCheckIn = checkInTime;
+        }
+      }
+    }
+
+    // If we have more than 10 exercises, check the remaining ones
+    if (exerciseIds.length > 10) {
+      for (int i = 10; i < exerciseIds.length; i += 10) {
+        final batch = exerciseIds.skip(i).take(10).toList();
+        final batchQuery =
+            await FirebaseFirestore.instance
+                .collection('exercise_check_ins')
+                .where('userId', isEqualTo: userId)
+                .where('exerciseId', whereIn: batch)
+                .get();
+
+        for (var doc in batchQuery.docs) {
+          final data = doc.data();
+          final timestamp = data['timestamp'];
+
+          DateTime? checkInTime;
+          if (timestamp is Timestamp) {
+            checkInTime = timestamp.toDate();
+          }
+
+          if (checkInTime != null) {
+            if (latestCheckIn == null || checkInTime.isAfter(latestCheckIn)) {
+              latestCheckIn = checkInTime;
+            }
+          }
+        }
+      }
+    }
+
+    return latestCheckIn;
+  }
+
+  // Helper method to format time difference
+  String _formatTimeDifference(DateTime lastTime) {
+    final now = DateTime.now();
+    final difference = now.difference(lastTime);
+
+    if (difference.inDays >= 14) {
+      final weeks = (difference.inDays / 7).floor();
+      return weeks == 1 ? 'a week' : '$weeks weeks';
+    } else if (difference.inDays >= 1) {
+      return difference.inDays == 1 ? 'a day' : '${difference.inDays} days';
+    } else if (difference.inHours >= 1) {
+      if (difference.inHours == 1) {
+        return 'an hour';
+      } else if (difference.inMinutes <= 90) {
+        return 'an hour and a half';
+      } else {
+        return '${difference.inHours} hours';
+      }
+    } else if (difference.inMinutes >= 30) {
+      return 'half an hour';
+    } else if (difference.inMinutes >= 1) {
+      return '${difference.inMinutes} minutes';
+    } else {
+      return 'moments';
+    }
+  }
+
+  // Helper method to get exercise status message
+  Future<String> _getExerciseStatusMessage(String userId) async {
+    try {
+      final allExerciseIds = await _getAllExerciseIds(userId);
+
+      if (allExerciseIds.isEmpty) {
+        return '';
+      }
+
+      final lastCheckIn = await _getLastCheckInTime(userId, allExerciseIds);
+
+      if (lastCheckIn == null) {
+        // No check-ins yet
+        final count = allExerciseIds.length;
+        if (count == 1) {
+          return '1 new exercise is ready for you!';
+        } else {
+          return '$count new exercises are ready for you!';
+        }
+      } else {
+        // Has check-ins, show time since last
+        final timeDiff = _formatTimeDifference(lastCheckIn);
+        return "It's been $timeDiff since your last set";
+      }
+    } catch (e) {
+      return '';
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final user = FirebaseAuth.instance.currentUser!;
@@ -105,51 +270,255 @@ class HomeScreen extends StatelessWidget {
           }
           final userData = snapshot.data!.data() as Map<String, dynamic>? ?? {};
           final planIds = List<String>.from(userData['planIds'] ?? []);
-          if (planIds.isEmpty) {
-            return Center(
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  const Icon(Icons.info_outline, size: 64, color: Colors.grey),
-                  const SizedBox(height: 16),
-                  const Text(
-                    'You have no assigned plans yet.',
-                    style: TextStyle(fontSize: 20, color: Colors.grey),
+          final exerciseIds = List<String>.from(userData['exerciseIds'] ?? []);
+          final name = (userData['name'] as String?)?.trim() ?? '';
+          final nameController = TextEditingController(text: name);
+
+          // If no plans and no exercises, show name display/edit above empty state
+          if (planIds.isEmpty && exerciseIds.isEmpty) {
+            return Column(
+              children: [
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 32, 16, 0),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          Expanded(
+                            child: Text(
+                              name.isNotEmpty
+                                  ? 'Hi $name!'
+                                  : 'Hi Anonymous User!',
+                              style: const TextStyle(
+                                fontSize: 18,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                          ),
+                          // Only show edit button if no name is set
+                          if (name.isEmpty)
+                            IconButton(
+                              icon: const Icon(Icons.edit),
+                              tooltip: 'Set Name',
+                              onPressed: () {
+                                showDialog(
+                                  context: context,
+                                  builder: (ctx) {
+                                    return AlertDialog(
+                                      title: const Text('Set Your Name'),
+                                      content: TextField(
+                                        controller: nameController,
+                                        decoration: const InputDecoration(
+                                          labelText: 'Enter your name',
+                                        ),
+                                        autofocus: true,
+                                      ),
+                                      actions: [
+                                        TextButton(
+                                          child: const Text('Cancel'),
+                                          onPressed:
+                                              () => Navigator.of(ctx).pop(),
+                                        ),
+                                        ElevatedButton(
+                                          child: const Text('Save'),
+                                          onPressed: () async {
+                                            final newName =
+                                                nameController.text.trim();
+                                            if (newName.isNotEmpty) {
+                                              await FirebaseFirestore.instance
+                                                  .collection('users')
+                                                  .doc(user.uid)
+                                                  .set({
+                                                    'name': newName,
+                                                  }, SetOptions(merge: true));
+                                              Navigator.of(ctx).pop();
+                                              ScaffoldMessenger.of(
+                                                context,
+                                              ).showSnackBar(
+                                                SnackBar(
+                                                  content: Text(
+                                                    'Name set! To change it later, please message admin.',
+                                                  ),
+                                                ),
+                                              );
+                                            }
+                                          },
+                                        ),
+                                      ],
+                                    );
+                                  },
+                                );
+                              },
+                            ),
+                        ],
+                      ),
+                    ],
                   ),
-                  const SizedBox(height: 24),
-                  ElevatedButton.icon(
-                    icon: const Icon(Icons.notifications_active),
-                    label: const Text('Send me a Nudge'),
-                    onPressed: () async {
-                      final now = DateTime.now();
-                      await FirebaseFirestore.instance
-                          .collection('users')
-                          .doc(user.uid)
-                          .set({
-                            'nudge': 1,
-                            'lastNudge': now.toIso8601String(),
-                          }, SetOptions(merge: true));
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        SnackBar(
-                          content: Text('Nudge sent at ${now.toLocal()}'),
+                ),
+                Expanded(
+                  child: Center(
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        const Icon(
+                          Icons.info_outline,
+                          size: 64,
+                          color: Colors.grey,
                         ),
-                      );
-                    },
+                        const SizedBox(height: 16),
+                        const Text(
+                          'You have no assigned plans or exercises yet.',
+                          style: TextStyle(fontSize: 20, color: Colors.grey),
+                        ),
+                        const SizedBox(height: 24),
+                        ElevatedButton.icon(
+                          icon: const Icon(Icons.notifications_active),
+                          label: const Text('Send me a Nudge'),
+                          onPressed: () async {
+                            final now = DateTime.now();
+                            await FirebaseFirestore.instance
+                                .collection('users')
+                                .doc(user.uid)
+                                .set({
+                                  'nudge': 1,
+                                  'lastNudge': now.toIso8601String(),
+                                }, SetOptions(merge: true));
+                            // Format timestamp in a user-friendly way
+                            final formattedTime =
+                                '${now.month}/${now.day}/${now.year} at ${now.hour > 12 ? now.hour - 12 : (now.hour == 0 ? 12 : now.hour)}:${now.minute.toString().padLeft(2, '0')} ${now.hour >= 12 ? 'PM' : 'AM'}';
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              SnackBar(
+                                content: Text('Nudge sent on $formattedTime'),
+                              ),
+                            );
+                          },
+                        ),
+                        const SizedBox(height: 16),
+                        MessageInputWidget(user: user),
+                      ],
+                    ),
                   ),
-                  const SizedBox(height: 16),
-                  MessageInputWidget(user: user),
-                ],
-              ),
+                ),
+              ],
             );
           }
+
+          // Show plans and then exercises, plus name display/edit with exercise status
           return Column(
             children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: FutureBuilder<String>(
+                        future: _getExerciseStatusMessage(user.uid),
+                        builder: (context, snapshot) {
+                          final greeting =
+                              name.isNotEmpty
+                                  ? 'Hi $name!'
+                                  : 'Hi Anonymous User!';
+                          final statusMessage =
+                              snapshot.hasData && snapshot.data!.isNotEmpty
+                                  ? ' ${snapshot.data!}'
+                                  : '';
+                          return Text(
+                            '$greeting$statusMessage',
+                            style: const TextStyle(
+                              fontSize: 18,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          );
+                        },
+                      ),
+                    ),
+                    // Only show edit button if no name is set
+                    if (name.isEmpty)
+                      IconButton(
+                        icon: const Icon(Icons.edit),
+                        tooltip: 'Set Name',
+                        onPressed: () {
+                          showDialog(
+                            context: context,
+                            builder: (ctx) {
+                              return AlertDialog(
+                                title: const Text('Set Your Name'),
+                                content: TextField(
+                                  controller: nameController,
+                                  decoration: const InputDecoration(
+                                    labelText: 'Enter your name',
+                                  ),
+                                  autofocus: true,
+                                ),
+                                actions: [
+                                  TextButton(
+                                    child: const Text('Cancel'),
+                                    onPressed: () => Navigator.of(ctx).pop(),
+                                  ),
+                                  ElevatedButton(
+                                    child: const Text('Save'),
+                                    onPressed: () async {
+                                      final newName =
+                                          nameController.text.trim();
+                                      if (newName.isNotEmpty) {
+                                        await FirebaseFirestore.instance
+                                            .collection('users')
+                                            .doc(user.uid)
+                                            .set({
+                                              'name': newName,
+                                            }, SetOptions(merge: true));
+                                        Navigator.of(ctx).pop();
+                                        ScaffoldMessenger.of(
+                                          context,
+                                        ).showSnackBar(
+                                          SnackBar(
+                                            content: Text(
+                                              'Name set! To change it later, please message admin.',
+                                            ),
+                                          ),
+                                        );
+                                      }
+                                    },
+                                  ),
+                                ],
+                              );
+                            },
+                          );
+                        },
+                      ),
+                  ],
+                ),
+              ),
               Expanded(
                 child: ListView(
-                  children:
-                      planIds
-                          .map((planId) => PlanTile(planId: planId))
-                          .toList(),
+                  children: [
+                    // Plans first
+                    ...planIds.map((planId) => PlanTile(planId: planId)),
+                    // Divider if both present
+                    if (planIds.isNotEmpty && exerciseIds.isNotEmpty)
+                      const Padding(
+                        padding: EdgeInsets.symmetric(vertical: 8.0),
+                        child: Divider(thickness: 1),
+                      ),
+                    // Directly assigned exercises
+                    if (exerciseIds.isNotEmpty)
+                      Padding(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 16.0,
+                          vertical: 4.0,
+                        ),
+                        child: Text(
+                          'Additional Exercises:',
+                          style: TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.bold,
+                            color: Colors.deepPurple,
+                          ),
+                        ),
+                      ),
+                    ...exerciseIds.map((eid) => ExerciseTile(exerciseId: eid)),
+                  ],
                 ),
               ),
               Padding(
@@ -168,9 +537,12 @@ class HomeScreen extends StatelessWidget {
                               'nudge': 1,
                               'lastNudge': now.toIso8601String(),
                             }, SetOptions(merge: true));
+                        // Format timestamp in a user-friendly way
+                        final formattedTime =
+                            '${now.month}/${now.day}/${now.year} at ${now.hour > 12 ? now.hour - 12 : (now.hour == 0 ? 12 : now.hour)}:${now.minute.toString().padLeft(2, '0')} ${now.hour >= 12 ? 'PM' : 'AM'}';
                         ScaffoldMessenger.of(context).showSnackBar(
                           SnackBar(
-                            content: Text('Nudge sent at ${now.toLocal()}'),
+                            content: Text('Nudge sent on $formattedTime'),
                           ),
                         );
                       },
@@ -204,7 +576,7 @@ class PlanTile extends StatelessWidget {
         final plan = snapshot.data!.data() as Map<String, dynamic>? ?? {};
 
         // Handle both old and new data structures
-        List<String> exerciseIds = [];
+        List<Map<String, dynamic>> exerciseData = [];
 
         // Check for new structure first (exercises array with exerciseId objects)
         if (plan.containsKey('exercises') && plan['exercises'] is List) {
@@ -219,38 +591,43 @@ class PlanTile extends StatelessWidget {
             return (aOrder as num).compareTo(bOrder as num);
           });
 
-          // Extract exerciseIds from the sorted list
-          exerciseIds =
+          // Store full exercise data including phase
+          exerciseData =
               exercisesList
-                  .map((exercise) => exercise['exerciseId'] as String?)
-                  .where((id) => id != null)
-                  .cast<String>()
+                  .where((exercise) => exercise['exerciseId'] != null)
                   .toList();
         }
         // Fallback to old structure (simple exerciseIds array)
         else if (plan.containsKey('exerciseIds') &&
             plan['exerciseIds'] is List) {
-          exerciseIds = List<String>.from(plan['exerciseIds'] ?? []);
+          final exerciseIds = List<String>.from(plan['exerciseIds'] ?? []);
+          exerciseData =
+              exerciseIds
+                  .map((id) => {'exerciseId': id, 'phase': null})
+                  .toList();
         }
-
-        // Debug logging to help identify the issue
-        print('Plan data: $plan');
-        print('Exercise IDs found: $exerciseIds');
 
         return ExpansionTile(
           title: Text(plan['name'] ?? 'Unnamed Plan'),
           subtitle:
-              exerciseIds.isEmpty
+              exerciseData.isEmpty
                   ? const Text(
                     'No exercises found',
                     style: TextStyle(color: Colors.red, fontSize: 12),
                   )
                   : Text(
-                    '${exerciseIds.length} exercise(s)',
+                    '${exerciseData.length} exercise(s)',
                     style: const TextStyle(fontSize: 12),
                   ),
           children:
-              exerciseIds.map((id) => ExerciseTile(exerciseId: id)).toList(),
+              exerciseData
+                  .map(
+                    (data) => ExerciseTile(
+                      exerciseId: data['exerciseId'] as String,
+                      phase: data['phase'] as String?,
+                    ),
+                  )
+                  .toList(),
         );
       },
     );
@@ -259,7 +636,8 @@ class PlanTile extends StatelessWidget {
 
 class ExerciseTile extends StatelessWidget {
   final String exerciseId;
-  const ExerciseTile({super.key, required this.exerciseId});
+  final String? phase;
+  const ExerciseTile({super.key, required this.exerciseId, this.phase});
   @override
   Widget build(BuildContext context) {
     return StreamBuilder<DocumentSnapshot>(
@@ -293,7 +671,31 @@ class ExerciseTile extends StatelessWidget {
         }
 
         return ExpansionTile(
-          title: Text(title),
+          title:
+              phase != null
+                  ? RichText(
+                    text: TextSpan(
+                      children: [
+                        TextSpan(
+                          text: title,
+                          style: DefaultTextStyle.of(context).style,
+                        ),
+                        TextSpan(
+                          text: ' - ',
+                          style: DefaultTextStyle.of(
+                            context,
+                          ).style.copyWith(color: Colors.grey),
+                        ),
+                        TextSpan(
+                          text: phase,
+                          style: DefaultTextStyle.of(
+                            context,
+                          ).style.copyWith(color: Colors.grey),
+                        ),
+                      ],
+                    ),
+                  )
+                  : Text(title),
           subtitle:
               subtitleParts.isNotEmpty
                   ? Text(
