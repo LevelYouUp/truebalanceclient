@@ -4,6 +4,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_ui_auth/firebase_ui_auth.dart' as ui;
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'firebase_options.dart';
+import 'exercise_video_player.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -1002,28 +1003,27 @@ class ExerciseTile extends StatelessWidget {
                     const SizedBox(height: 8),
                   ],
                   if (videoUrl != null && videoUrl.toString().isNotEmpty) ...[
-                    Row(
-                      children: [
-                        const Text(
-                          'Video URL: ',
-                          style: TextStyle(
-                            fontWeight: FontWeight.bold,
-                            fontSize: 13,
-                          ),
-                        ),
-                        Expanded(
-                          child: Text(
-                            videoUrl.toString(),
-                            style: const TextStyle(
-                              fontSize: 13,
-                              color: Colors.blue,
-                            ),
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                        ),
-                      ],
+                    const Text(
+                      'Exercise Video:',
+                      style: TextStyle(
+                        fontWeight: FontWeight.bold,
+                        fontSize: 13,
+                      ),
                     ),
                     const SizedBox(height: 8),
+                    Container(
+                      decoration: BoxDecoration(
+                        borderRadius: BorderRadius.circular(8),
+                        border: Border.all(color: Colors.grey.shade300),
+                      ),
+                      child: ClipRRect(
+                        borderRadius: BorderRadius.circular(8),
+                        child: ExerciseVideoPlayer(
+                          videoUrl: videoUrl.toString(),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 12),
                   ],
                   if (createdAt != null && createdAt.toString().isNotEmpty) ...[
                     Row(
