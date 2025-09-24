@@ -147,7 +147,7 @@ class NotificationService {
       // Check if user has completed any exercise in the configured interval
       final prefs = await SharedPreferences.getInstance();
       final intervalHours = prefs.getInt('notification_interval_hours') ?? 25;
-      
+
       final lastCheckInTime = await _getLastCheckInTime(exerciseIds);
       if (lastCheckInTime != null) {
         final timeSinceLastCheckIn = DateTime.now().difference(lastCheckInTime);

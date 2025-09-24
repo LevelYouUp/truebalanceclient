@@ -587,15 +587,12 @@ class _InactiveUserPageState extends State<InactiveUserPage> {
           // Valid passcode - link the user to the provider (DO NOT ACTIVATE)
           final user = FirebaseAuth.instance.currentUser;
           if (user != null) {
-            await FirebaseFirestore.instance
-                .collection('users')
-                .doc(user.uid)
-                .update({
-                  'lastUpdated': FieldValue.serverTimestamp(),
-                  'activatedBy': result['providerId'],
-                  // NOTE: We do NOT set 'activatedAt' here - that should only be set when admin actually activates the user
-                  // NOTE: We do NOT set 'active': true here - user remains inactive until provider manually activates them
-                });
+            await FirebaseFirestore.instance.collection('users').doc(user.uid).update({
+              'lastUpdated': FieldValue.serverTimestamp(),
+              'activatedBy': result['providerId'],
+              // NOTE: We do NOT set 'activatedAt' here - that should only be set when admin actually activates the user
+              // NOTE: We do NOT set 'active': true here - user remains inactive until provider manually activates them
+            });
 
             ScaffoldMessenger.of(context).showSnackBar(
               SnackBar(
@@ -2303,15 +2300,12 @@ class _PainLineChartState extends State<PainLineChart> {
     final totalTimeSpan =
         latestTime.millisecondsSinceEpoch - earliestTime.millisecondsSinceEpoch;
 
-    // Track used X positions to match the chart painter logic
-    final usedPositions = <double>[];
-
     for (int i = 0; i < timestamps.length; i++) {
       final timestamp = timestamps[i];
       final docData = widget.data[i].data() as Map<String, dynamic>;
       final painLevel = (docData['painLevel'] ?? 0).toDouble();
 
-      // Calculate point position with same logic as chart painter
+      // Calculate point position based on timestamp
       final timeProgress =
           totalTimeSpan > 0
               ? (timestamp.millisecondsSinceEpoch -
@@ -2319,40 +2313,8 @@ class _PainLineChartState extends State<PainLineChart> {
                   totalTimeSpan
               : (i / (timestamps.length - 1).clamp(1, double.infinity));
 
-      double pointX = leftMargin + timeProgress * chartWidth;
+      final pointX = leftMargin + timeProgress * chartWidth;
       final pointY = topMargin + chartHeight - (painLevel / 10) * chartHeight;
-
-      // Apply same position adjustment as in chart painter
-      const double minPointDistance = 3.0;
-
-      for (
-        int attempts = 0;
-        attempts < usedPositions.length && attempts < 10;
-        attempts++
-      ) {
-        bool tooClose = false;
-        for (double usedX in usedPositions) {
-          if ((pointX - usedX).abs() < minPointDistance) {
-            tooClose = true;
-            break;
-          }
-        }
-
-        if (!tooClose) {
-          break;
-        }
-
-        // Apply same offset logic as chart painter
-        double offset =
-            minPointDistance *
-            (attempts % 2 == 0 ? 1 : -1) *
-            ((attempts ~/ 2) + 1);
-        pointX = leftMargin + timeProgress * chartWidth + offset;
-      }
-
-      // Ensure point stays within chart bounds
-      pointX = pointX.clamp(leftMargin, leftMargin + chartWidth);
-      usedPositions.add(pointX);
 
       // Check if tap/hover position is near this point (within 15 pixels)
       final distance = (Offset(pointX, pointY) - position).distance;
@@ -2602,9 +2564,6 @@ class LineChartPainter extends CustomPainter {
     final totalTimeSpan =
         latestTime.millisecondsSinceEpoch - earliestTime.millisecondsSinceEpoch;
 
-    // Track used X positions to avoid overlapping points
-    final usedPositions = <double>[];
-
     for (int i = 0; i < timestamps.length; i++) {
       final timestamp = timestamps[i];
       final painLevel = painLevels[i];
@@ -2617,42 +2576,8 @@ class LineChartPainter extends CustomPainter {
                   totalTimeSpan
               : (i / (timestamps.length - 1).clamp(1, double.infinity));
 
-      double x = leftMargin + timeProgress * chartWidth;
+      final x = leftMargin + timeProgress * chartWidth;
       final y = topMargin + chartHeight - (painLevel / 10) * chartHeight;
-
-      // Check for very close X positions and apply small offset if needed
-      const double minPointDistance =
-          3.0; // Minimum pixels between point centers
-
-      // Check against all previously placed points
-      for (
-        int attempts = 0;
-        attempts < usedPositions.length && attempts < 10;
-        attempts++
-      ) {
-        bool tooClose = false;
-        for (double usedX in usedPositions) {
-          if ((x - usedX).abs() < minPointDistance) {
-            tooClose = true;
-            break;
-          }
-        }
-
-        if (!tooClose) {
-          break;
-        }
-
-        // Apply small offset - alternate left and right
-        double offset =
-            minPointDistance *
-            (attempts % 2 == 0 ? 1 : -1) *
-            ((attempts ~/ 2) + 1);
-        x = leftMargin + timeProgress * chartWidth + offset;
-      }
-
-      // Ensure point stays within chart bounds
-      x = x.clamp(leftMargin, leftMargin + chartWidth);
-      usedPositions.add(x);
 
       points.add(Offset(x, y));
     }
@@ -3505,8 +3430,10 @@ class _HomeScreenState extends State<HomeScreen> {
               title: const Text('Exercise Reminder Settings'),
               content: FutureBuilder<Map<String, dynamic>>(
                 future: () async {
-                  final isEnabled = await ExerciseReminderManager.areRemindersEnabled();
-                  final intervalHours = await ExerciseReminderManager.getNotificationIntervalHours();
+                  final isEnabled =
+                      await ExerciseReminderManager.areRemindersEnabled();
+                  final intervalHours =
+                      await ExerciseReminderManager.getNotificationIntervalHours();
                   return {
                     'isEnabled': isEnabled,
                     'intervalHours': intervalHours,
@@ -3520,9 +3447,6 @@ class _HomeScreenState extends State<HomeScreen> {
                   final data = snapshot.data!;
                   final isEnabled = data['isEnabled'] as bool;
                   final intervalHours = data['intervalHours'] as int;
-                  
-                  // Calculate offset from 24-hour base
-                  int offset = intervalHours - 24;
 
                   return Column(
                     mainAxisSize: MainAxisSize.min,
@@ -3542,73 +3466,72 @@ class _HomeScreenState extends State<HomeScreen> {
                         ),
                         value: isEnabled,
                         onChanged: (bool value) async {
-                          await ExerciseReminderManager.setRemindersEnabled(value);
+                          await ExerciseReminderManager.setRemindersEnabled(
+                            value,
+                          );
                           setState(() {}); // Refresh the dialog
                         },
                       ),
                       if (isEnabled) ...[
                         const SizedBox(height: 16),
                         const Text(
-                          'How often should we notify you?',
-                          style: TextStyle(fontSize: 16, fontWeight: FontWeight.w500),
+                          'Remind me every:',
+                          style: TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.w500,
+                          ),
                         ),
                         const SizedBox(height: 12),
-                        Row(
-                          children: [
-                            const Text('24 hours', style: TextStyle(fontSize: 14)),
-                            const SizedBox(width: 8),
-                            Container(
-                              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-                              decoration: BoxDecoration(
-                                border: Border.all(color: Colors.grey),
-                                borderRadius: BorderRadius.circular(4),
-                              ),
-                              child: DropdownButtonHideUnderline(
-                                child: DropdownButton<int>(
-                                  value: offset.clamp(-23, 48), // Limit range
-                                  isDense: true,
-                                  items: List.generate(72, (index) {
-                                    final value = index - 23; // Range from -23 to +48
-                                    return DropdownMenuItem<int>(
-                                      value: value,
-                                      child: Text(
-                                        value >= 0 ? '+$value' : '$value',
-                                        style: const TextStyle(fontSize: 14),
-                                      ),
-                                    );
-                                  }),
-                                  onChanged: (int? newOffset) async {
-                                    if (newOffset != null) {
-                                      final newIntervalHours = 24 + newOffset;
-                                      await ExerciseReminderManager.setNotificationIntervalHours(newIntervalHours);
-                                      setState(() {}); // Refresh the dialog
-                                    }
-                                  },
-                                ),
-                              ),
+                        Container(
+                          width: double.infinity,
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 12,
+                            vertical: 8,
+                          ),
+                          decoration: BoxDecoration(
+                            border: Border.all(color: Colors.grey),
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                          child: DropdownButtonHideUnderline(
+                            child: DropdownButton<int>(
+                              value: intervalHours.clamp(1, 48),
+                              isExpanded: true,
+                              items: List.generate(48, (index) {
+                                final hours = index + 1;
+                                return DropdownMenuItem<int>(
+                                  value: hours,
+                                  child: Text(
+                                    hours == 1 ? '$hours hour' : '$hours hours',
+                                    style: const TextStyle(fontSize: 14),
+                                  ),
+                                );
+                              }),
+                              onChanged: (int? newHours) async {
+                                if (newHours != null) {
+                                  await ExerciseReminderManager.setNotificationIntervalHours(
+                                    newHours,
+                                  );
+                                  setState(() {}); // Refresh the dialog
+                                }
+                              },
                             ),
-                            const SizedBox(width: 8),
-                            Text(
-                              '= ${intervalHours} hours',
-                              style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w500),
-                            ),
-                          ],
+                          ),
                         ),
-                        const SizedBox(height: 8),
+                        const SizedBox(height: 12),
                         Text(
-                          offset == 1
-                              ? 'Reminders 1 hour after your most recent exercise'
-                              : offset < 0
-                                  ? 'Reminders ${offset.abs()} hour${offset.abs() == 1 ? '' : 's'} before the 24-hour mark'
-                                  : offset == 0
-                                      ? 'Reminders exactly 24 hours after your most recent exercise'
-                                      : 'Reminders every ${intervalHours} hours',
-                          style: const TextStyle(fontSize: 12, color: Colors.grey),
+                          'You will receive reminders every $intervalHours hour${intervalHours == 1 ? '' : 's'} after your most recent exercise.',
+                          style: const TextStyle(
+                            fontSize: 12,
+                            color: Colors.grey,
+                          ),
                         ),
                         const SizedBox(height: 16),
                         Text(
                           'ℹ️ Notifications will only be sent once per day and only if you have exercises assigned but haven\'t completed any in the last $intervalHours hours.',
-                          style: const TextStyle(fontSize: 12, color: Colors.grey),
+                          style: const TextStyle(
+                            fontSize: 12,
+                            color: Colors.grey,
+                          ),
                         ),
                         const SizedBox(height: 16),
                         ElevatedButton.icon(
@@ -3885,61 +3808,15 @@ class _HomeScreenState extends State<HomeScreen> {
                             ),
                           ),
                           const SizedBox(height: 16),
-                          // Communication buttons
+                          // Communication buttons with independent message input
                           ConstrainedBox(
                             constraints: const BoxConstraints(maxWidth: 400),
-                            child: Row(
-                              children: [
-                                Expanded(
-                                  child: ElevatedButton.icon(
-                                    icon: const Icon(
-                                      Icons.notifications_active,
-                                    ),
-                                    label: const Text(
-                                      'Send me a Nudge',
-                                      textAlign: TextAlign.center,
-                                    ),
-                                    style: ElevatedButton.styleFrom(
-                                      padding: const EdgeInsets.symmetric(
-                                        vertical: 12,
-                                        horizontal: 8,
-                                      ),
-                                    ),
-                                    onPressed: () async {
-                                      final now = DateTime.now();
-                                      await FirebaseFirestore.instance
-                                          .collection('users')
-                                          .doc(user.uid)
-                                          .set({
-                                            'nudge': 1,
-                                            'lastNudge': now.toIso8601String(),
-                                          }, SetOptions(merge: true));
-                                      // Format timestamp in a user-friendly way
-                                      final formattedTime =
-                                          '${now.month}/${now.day}/${now.year} at ${now.hour > 12 ? now.hour - 12 : (now.hour == 0 ? 12 : now.hour)}:${now.minute.toString().padLeft(2, '0')} ${now.hour >= 12 ? 'PM' : 'AM'}';
-                                      ScaffoldMessenger.of(
-                                        context,
-                                      ).showSnackBar(
-                                        SnackBar(
-                                          content: Text(
-                                            'Nudge sent on $formattedTime',
-                                          ),
-                                        ),
-                                      );
-                                    },
-                                  ),
-                                ),
-                                const SizedBox(width: 8),
-                                Expanded(
-                                  child: MessageInputWidget(
-                                    user: user,
-                                    getUnreadMessageInfo: _getUnreadMessageInfo,
-                                    markProviderMessagesAsRead:
-                                        _markProviderMessagesAsRead,
-                                    formatMessageTime: _formatMessageTime,
-                                  ),
-                                ),
-                              ],
+                            child: MessageButtonRow(
+                              user: user,
+                              getUnreadMessageInfo: _getUnreadMessageInfo,
+                              markProviderMessagesAsRead:
+                                  _markProviderMessagesAsRead,
+                              formatMessageTime: _formatMessageTime,
                             ),
                           ),
                         ],
@@ -4124,57 +4001,15 @@ class _HomeScreenState extends State<HomeScreen> {
                         ),
                       ),
                       const SizedBox(height: 8),
-                      // Communication buttons
+                      // Communication buttons with independent message input
                       ConstrainedBox(
                         constraints: const BoxConstraints(maxWidth: 400),
-                        child: Row(
-                          children: [
-                            Expanded(
-                              child: ElevatedButton.icon(
-                                icon: const Icon(Icons.notifications_active),
-                                label: const Text(
-                                  'Send me a Nudge',
-                                  textAlign: TextAlign.center,
-                                ),
-                                style: ElevatedButton.styleFrom(
-                                  padding: const EdgeInsets.symmetric(
-                                    vertical: 12,
-                                    horizontal: 8,
-                                  ),
-                                ),
-                                onPressed: () async {
-                                  final now = DateTime.now();
-                                  await FirebaseFirestore.instance
-                                      .collection('users')
-                                      .doc(user.uid)
-                                      .set({
-                                        'nudge': 1,
-                                        'lastNudge': now.toIso8601String(),
-                                      }, SetOptions(merge: true));
-                                  // Format timestamp in a user-friendly way
-                                  final formattedTime =
-                                      '${now.month}/${now.day}/${now.year} at ${now.hour > 12 ? now.hour - 12 : (now.hour == 0 ? 12 : now.hour)}:${now.minute.toString().padLeft(2, '0')} ${now.hour >= 12 ? 'PM' : 'AM'}';
-                                  ScaffoldMessenger.of(context).showSnackBar(
-                                    SnackBar(
-                                      content: Text(
-                                        'Nudge sent on $formattedTime',
-                                      ),
-                                    ),
-                                  );
-                                },
-                              ),
-                            ),
-                            const SizedBox(width: 8),
-                            Expanded(
-                              child: MessageInputWidget(
-                                user: user,
-                                getUnreadMessageInfo: _getUnreadMessageInfo,
-                                markProviderMessagesAsRead:
-                                    _markProviderMessagesAsRead,
-                                formatMessageTime: _formatMessageTime,
-                              ),
-                            ),
-                          ],
+                        child: MessageButtonRow(
+                          user: user,
+                          getUnreadMessageInfo: _getUnreadMessageInfo,
+                          markProviderMessagesAsRead:
+                              _markProviderMessagesAsRead,
+                          formatMessageTime: _formatMessageTime,
                         ),
                       ),
                       const SizedBox(height: 8),
@@ -4893,6 +4728,665 @@ class ExerciseTile extends StatelessWidget {
   }
 }
 
+// MessageButtonRow manages the button layout and message input window independently
+class MessageButtonRow extends StatefulWidget {
+  final User user;
+  final Future<Map<String, dynamic>> Function(String) getUnreadMessageInfo;
+  final Future<void> Function(String) markProviderMessagesAsRead;
+  final String Function(DateTime) formatMessageTime;
+
+  const MessageButtonRow({
+    super.key,
+    required this.user,
+    required this.getUnreadMessageInfo,
+    required this.markProviderMessagesAsRead,
+    required this.formatMessageTime,
+  });
+
+  @override
+  State<MessageButtonRow> createState() => _MessageButtonRowState();
+}
+
+class _MessageButtonRowState extends State<MessageButtonRow> {
+  bool showMessageInput = false;
+
+  void _toggleMessageInput() {
+    setState(() {
+      showMessageInput = !showMessageInput;
+    });
+  }
+
+  void _closeMessageInput() {
+    setState(() {
+      showMessageInput = false;
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      children: [
+        // Button Row - always takes constrained width
+        Row(
+          children: [
+            Expanded(
+              child: ElevatedButton.icon(
+                icon: const Icon(Icons.notifications_active),
+                label: const Text(
+                  'Send Me a Nudge',
+                  textAlign: TextAlign.center,
+                ),
+                style: ElevatedButton.styleFrom(
+                  padding: const EdgeInsets.symmetric(
+                    vertical: 12,
+                    horizontal: 8,
+                  ),
+                ),
+                onPressed: () async {
+                  final now = DateTime.now();
+                  await FirebaseFirestore.instance
+                      .collection('users')
+                      .doc(widget.user.uid)
+                      .set({
+                        'nudge': 1,
+                        'lastNudge': now.toIso8601String(),
+                      }, SetOptions(merge: true));
+                  // Format timestamp in a user-friendly way
+                  final formattedTime =
+                      '${now.month}/${now.day}/${now.year} at ${now.hour > 12 ? now.hour - 12 : (now.hour == 0 ? 12 : now.hour)}:${now.minute.toString().padLeft(2, '0')} ${now.hour >= 12 ? 'PM' : 'AM'}';
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(content: Text('Nudge sent on $formattedTime')),
+                  );
+                },
+              ),
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              child: MessageButton(
+                user: widget.user,
+                markProviderMessagesAsRead: widget.markProviderMessagesAsRead,
+                formatMessageTime: widget.formatMessageTime,
+                onPressed: _toggleMessageInput,
+              ),
+            ),
+          ],
+        ),
+        // Message Input Window - appears independently with full width when toggled
+        if (showMessageInput)
+          Padding(
+            padding: const EdgeInsets.only(top: 8.0),
+            child: FullWidthMessageInput(
+              user: widget.user,
+              formatMessageTime: widget.formatMessageTime,
+              onClose: _closeMessageInput,
+            ),
+          ),
+      ],
+    );
+  }
+}
+
+// Separate button component that just handles the message button
+class MessageButton extends StatelessWidget {
+  final User user;
+  final Future<void> Function(String) markProviderMessagesAsRead;
+  final String Function(DateTime) formatMessageTime;
+  final VoidCallback onPressed;
+
+  const MessageButton({
+    super.key,
+    required this.user,
+    required this.markProviderMessagesAsRead,
+    required this.formatMessageTime,
+    required this.onPressed,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return StreamBuilder<QuerySnapshot>(
+      stream:
+          FirebaseFirestore.instance
+              .collection('messages')
+              .where('userId', isEqualTo: user.uid)
+              .where('fromAdmin', isEqualTo: true)
+              .snapshots(),
+      builder: (context, snapshot) {
+        int unreadCount = 0;
+        DateTime? latestTimestamp;
+
+        if (snapshot.hasData) {
+          final unreadMessages =
+              snapshot.data!.docs.where((doc) {
+                final data = doc.data() as Map<String, dynamic>;
+                return !data.containsKey('read') || data['read'] != true;
+              }).toList();
+
+          unreadCount = unreadMessages.length;
+
+          for (var doc in unreadMessages) {
+            final data = doc.data() as Map<String, dynamic>;
+            final timestamp = data['timestamp'];
+
+            DateTime? messageTime;
+            if (timestamp is Timestamp) {
+              messageTime = timestamp.toDate();
+            } else if (timestamp is String) {
+              try {
+                messageTime = DateTime.parse(timestamp);
+              } catch (_) {}
+            }
+
+            if (messageTime != null) {
+              if (latestTimestamp == null ||
+                  messageTime.isAfter(latestTimestamp)) {
+                latestTimestamp = messageTime;
+              }
+            }
+          }
+        }
+
+        String buttonText;
+        if (unreadCount > 0) {
+          final timeText =
+              latestTimestamp != null
+                  ? formatMessageTime(latestTimestamp)
+                  : 'recently';
+
+          if (unreadCount == 1) {
+            buttonText = '1 New message received ($timeText)';
+          } else {
+            buttonText = '$unreadCount New messages received ($timeText)';
+          }
+        } else {
+          buttonText = 'Send Me a Message';
+        }
+
+        return ElevatedButton.icon(
+          icon: Icon(unreadCount > 0 ? Icons.mark_email_unread : Icons.message),
+          label: Text(
+            buttonText,
+            textAlign: TextAlign.center,
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+          ),
+          style: ElevatedButton.styleFrom(
+            padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 8),
+            backgroundColor: unreadCount > 0 ? Colors.orange : null,
+            foregroundColor: unreadCount > 0 ? Colors.white : null,
+          ),
+          onPressed: () async {
+            if (unreadCount > 0) {
+              await markProviderMessagesAsRead(user.uid);
+            }
+            onPressed();
+          },
+        );
+      },
+    );
+  }
+}
+
+// Full-width message input widget that appears independently
+class FullWidthMessageInput extends StatefulWidget {
+  final User user;
+  final String Function(DateTime) formatMessageTime;
+  final VoidCallback onClose;
+
+  const FullWidthMessageInput({
+    super.key,
+    required this.user,
+    required this.formatMessageTime,
+    required this.onClose,
+  });
+
+  @override
+  State<FullWidthMessageInput> createState() => _FullWidthMessageInputState();
+}
+
+class _FullWidthMessageInputState extends State<FullWidthMessageInput> {
+  final TextEditingController _controller = TextEditingController();
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  Future<void> _markProviderMessagesAsReadWithTimeLimit(
+    DateTime currentTime,
+  ) async {
+    try {
+      final cutoffTime = currentTime.subtract(const Duration(seconds: 1));
+
+      final messagesQuery =
+          await FirebaseFirestore.instance
+              .collection('messages')
+              .where('userId', isEqualTo: widget.user.uid)
+              .where('fromAdmin', isEqualTo: true)
+              .get();
+
+      final batch = FirebaseFirestore.instance.batch();
+
+      for (var doc in messagesQuery.docs) {
+        final data = doc.data();
+
+        if (data.containsKey('read') && data['read'] == true) {
+          continue;
+        }
+
+        final timestamp = data['timestamp'];
+        DateTime? messageTime;
+
+        if (timestamp is Timestamp) {
+          messageTime = timestamp.toDate();
+        } else if (timestamp is String) {
+          try {
+            messageTime = DateTime.parse(timestamp);
+          } catch (_) {}
+        }
+
+        if (messageTime != null && messageTime.isBefore(cutoffTime)) {
+          batch.update(doc.reference, {'read': true});
+        }
+      }
+
+      await batch.commit();
+    } catch (e) {
+      // Handle error silently
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: MediaQuery.of(context).size.width - 32,
+      margin: const EdgeInsets.symmetric(horizontal: 0.0),
+      padding: const EdgeInsets.all(16.0),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: Colors.grey.shade300),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.grey.withOpacity(0.1),
+            spreadRadius: 1,
+            blurRadius: 4,
+            offset: const Offset(0, 2),
+          ),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          TextField(
+            controller: _controller,
+            decoration: InputDecoration(
+              labelText: 'Type your message...',
+              hintText: 'Send a message to your provider',
+              border: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(8),
+              ),
+              enabledBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(8),
+                borderSide: BorderSide(color: Colors.grey.shade300),
+              ),
+              focusedBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(8),
+                borderSide: const BorderSide(
+                  color: Colors.deepPurple,
+                  width: 2,
+                ),
+              ),
+              contentPadding: const EdgeInsets.symmetric(
+                horizontal: 12,
+                vertical: 12,
+              ),
+            ),
+            minLines: 2,
+            maxLines: 4,
+          ),
+          const SizedBox(height: 12),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.end,
+            children: [
+              OutlinedButton(
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: Colors.grey.shade700,
+                  side: BorderSide(color: Colors.grey.shade300),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 16,
+                    vertical: 8,
+                  ),
+                ),
+                child: const Text('Cancel'),
+                onPressed: () async {
+                  await _markProviderMessagesAsReadWithTimeLimit(
+                    DateTime.now(),
+                  );
+                  _controller.clear();
+                  widget.onClose();
+                },
+              ),
+              const SizedBox(width: 12),
+              ElevatedButton(
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Colors.deepPurple,
+                  foregroundColor: Colors.white,
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 20,
+                    vertical: 8,
+                  ),
+                  elevation: 2,
+                ),
+                child: const Text('Send'),
+                onPressed: () async {
+                  final text = _controller.text.trim();
+                  final now = DateTime.now();
+
+                  await _markProviderMessagesAsReadWithTimeLimit(now);
+
+                  if (text.isNotEmpty) {
+                    await FirebaseFirestore.instance
+                        .collection('messages')
+                        .add({
+                          'userId': widget.user.uid,
+                          'timestamp': now.toIso8601String(),
+                          'message': text,
+                        });
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(
+                        content: Text('Message sent!'),
+                        duration: Duration(seconds: 1),
+                      ),
+                    );
+                  } else {
+                    await FirebaseFirestore.instance
+                        .collection('messages')
+                        .add({
+                          'userId': widget.user.uid,
+                          'timestamp': now.toIso8601String(),
+                          'message': '',
+                        });
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(content: Text('Nudge sent!')),
+                    );
+                  }
+
+                  await FirebaseFirestore.instance
+                      .collection('users')
+                      .doc(widget.user.uid)
+                      .set({
+                        'nudge': 1,
+                        'lastNudge': now.toIso8601String(),
+                      }, SetOptions(merge: true));
+
+                  _controller.clear();
+                  widget.onClose();
+                },
+              ),
+            ],
+          ),
+          const SizedBox(height: 16),
+          const Divider(),
+          const SizedBox(height: 8),
+          Row(
+            children: [
+              Icon(Icons.history, color: Colors.grey.shade600, size: 20),
+              const SizedBox(width: 8),
+              Text(
+                'Message History',
+                style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                  fontWeight: FontWeight.w600,
+                  color: Colors.grey.shade700,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          Container(
+            height: 400,
+            decoration: BoxDecoration(
+              border: Border.all(color: Colors.grey.shade200),
+              borderRadius: BorderRadius.circular(8),
+              color: Colors.grey.shade50,
+            ),
+            child: Padding(
+              padding: const EdgeInsets.all(8.0),
+              child: StreamBuilder<QuerySnapshot>(
+                stream:
+                    FirebaseFirestore.instance
+                        .collection('messages')
+                        .where('userId', isEqualTo: widget.user.uid)
+                        .orderBy('timestamp', descending: true)
+                        .snapshots(),
+                builder: (context, snapshot) {
+                  if (snapshot.connectionState == ConnectionState.waiting) {
+                    return const Center(
+                      child: Padding(
+                        padding: EdgeInsets.all(20.0),
+                        child: CircularProgressIndicator(),
+                      ),
+                    );
+                  }
+                  if (snapshot.hasError) {
+                    return StreamBuilder<QuerySnapshot>(
+                      stream:
+                          FirebaseFirestore.instance
+                              .collection('messages')
+                              .where('userId', isEqualTo: widget.user.uid)
+                              .snapshots(),
+                      builder: (context, snap2) {
+                        if (snap2.connectionState == ConnectionState.waiting) {
+                          return const Center(
+                            child: CircularProgressIndicator(),
+                          );
+                        }
+                        if (!snap2.hasData) {
+                          return const Center(
+                            child: Text(
+                              'No messages found.',
+                              style: TextStyle(color: Colors.grey),
+                            ),
+                          );
+                        }
+                        final docs =
+                            snap2.data!.docs
+                                .where(
+                                  (d) =>
+                                      (d.data()
+                                          as Map<
+                                            String,
+                                            dynamic
+                                          >?)?['timestamp'] !=
+                                      null,
+                                )
+                                .toList();
+                        if (docs.isEmpty) {
+                          return const Center(
+                            child: Padding(
+                              padding: EdgeInsets.all(20.0),
+                              child: Text(
+                                'No messages yet. Start a conversation!',
+                                style: TextStyle(color: Colors.grey),
+                              ),
+                            ),
+                          );
+                        }
+                        docs.sort((a, b) {
+                          final aData = a.data() as Map<String, dynamic>;
+                          final bData = b.data() as Map<String, dynamic>;
+                          final aTimestamp = aData['timestamp'];
+                          final bTimestamp = bData['timestamp'];
+
+                          DateTime? aTime;
+                          DateTime? bTime;
+
+                          if (aTimestamp is Timestamp) {
+                            aTime = aTimestamp.toDate();
+                          } else if (aTimestamp is String) {
+                            try {
+                              aTime = DateTime.parse(aTimestamp);
+                            } catch (_) {}
+                          }
+
+                          if (bTimestamp is Timestamp) {
+                            bTime = bTimestamp.toDate();
+                          } else if (bTimestamp is String) {
+                            try {
+                              bTime = DateTime.parse(bTimestamp);
+                            } catch (_) {}
+                          }
+
+                          if (bTime == null && aTime == null) return 0;
+                          if (bTime == null) return -1;
+                          if (aTime == null) return 1;
+                          return bTime.compareTo(aTime);
+                        });
+                        return ListView.builder(
+                          reverse: true,
+                          itemCount: docs.length,
+                          itemBuilder: (context, index) {
+                            return _buildMessageBubble(docs[index]);
+                          },
+                        );
+                      },
+                    );
+                  }
+                  if (!snapshot.hasData) {
+                    return const Center(
+                      child: Text(
+                        'No messages found.',
+                        style: TextStyle(color: Colors.grey),
+                      ),
+                    );
+                  }
+                  final docs = snapshot.data!.docs;
+                  if (docs.isEmpty) {
+                    return const Center(
+                      child: Padding(
+                        padding: EdgeInsets.all(20.0),
+                        child: Text(
+                          'No messages yet. Start a conversation!',
+                          style: TextStyle(color: Colors.grey),
+                        ),
+                      ),
+                    );
+                  }
+                  return ListView.builder(
+                    reverse: true,
+                    itemCount: docs.length,
+                    itemBuilder: (context, index) {
+                      return _buildMessageBubble(docs[index]);
+                    },
+                  );
+                },
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildMessageBubble(QueryDocumentSnapshot doc) {
+    final data = doc.data() as Map<String, dynamic>? ?? {};
+    final msg = data['message'] ?? '';
+    final ts = data['timestamp'] ?? '';
+
+    // Robustly parse fromProvider field
+    bool fromProvider = false;
+    if (data.containsKey('fromAdmin')) {
+      final raw = data['fromAdmin'];
+      if (raw is bool) {
+        fromProvider = raw;
+      } else if (raw is String) {
+        fromProvider = raw.toLowerCase() == 'true';
+      } else if (raw is int) {
+        fromProvider = raw == 1;
+      }
+    }
+
+    DateTime? dt;
+    if (ts is Timestamp) {
+      dt = ts.toDate();
+    } else if (ts is String) {
+      try {
+        dt = DateTime.parse(ts);
+      } catch (_) {}
+    }
+
+    final formatted = dt != null ? widget.formatMessageTime(dt) : ts.toString();
+
+    if (fromProvider) {
+      // Provider message: left-aligned, blue background
+      return Align(
+        alignment: Alignment.centerLeft,
+        child: Container(
+          margin: const EdgeInsets.symmetric(vertical: 2, horizontal: 8),
+          padding: const EdgeInsets.symmetric(vertical: 6, horizontal: 12),
+          decoration: BoxDecoration(
+            color: Colors.blue[50],
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: Colors.blue, width: 0.5),
+          ),
+          child: RichText(
+            text: TextSpan(
+              style: const TextStyle(fontSize: 14, color: Colors.black),
+              children: [
+                TextSpan(text: msg.isEmpty ? '(nudge)' : msg),
+                TextSpan(
+                  text: ' sent by Provider at $formatted',
+                  style: const TextStyle(
+                    fontSize: 12,
+                    color: Colors.blue,
+                    fontStyle: FontStyle.italic,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      );
+    } else {
+      // User message: right-aligned, purple background
+      return Align(
+        alignment: Alignment.centerRight,
+        child: Container(
+          margin: const EdgeInsets.symmetric(vertical: 2, horizontal: 8),
+          padding: const EdgeInsets.symmetric(vertical: 6, horizontal: 12),
+          decoration: BoxDecoration(
+            color: Colors.deepPurple[50],
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: Colors.deepPurple, width: 0.5),
+          ),
+          child: RichText(
+            text: TextSpan(
+              style: const TextStyle(fontSize: 14, color: Colors.black),
+              children: [
+                TextSpan(text: msg.isEmpty ? '(nudge)' : msg),
+                TextSpan(
+                  text: ' sent by You at $formatted',
+                  style: const TextStyle(
+                    fontSize: 12,
+                    color: Colors.deepPurple,
+                    fontStyle: FontStyle.italic,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      );
+    }
+  }
+}
+
 // MessageInputWidget for user message input
 class MessageInputWidget extends StatefulWidget {
   final User user;
@@ -5040,7 +5534,7 @@ class _MessageInputWidgetState extends State<MessageInputWidget> {
                 buttonText = '$unreadCount New messages received ($timeText)';
               }
             } else {
-              buttonText = 'Send me a message';
+              buttonText = 'Send Me a Message';
             }
 
             return ElevatedButton.icon(
@@ -5077,25 +5571,92 @@ class _MessageInputWidgetState extends State<MessageInputWidget> {
     }
     if (showInput) {
       children.add(
-        Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 24.0),
+        Container(
+          width: MediaQuery.of(context).size.width - 32,
+          margin: const EdgeInsets.symmetric(horizontal: 0.0, vertical: 8.0),
+          padding: const EdgeInsets.all(16.0),
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: Colors.grey.shade300),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.grey.withOpacity(0.1),
+                spreadRadius: 1,
+                blurRadius: 4,
+                offset: const Offset(0, 2),
+              ),
+            ],
+          ),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               TextField(
                 controller: _controller,
-                decoration: const InputDecoration(
-                  labelText: 'Type your message',
-                  border: OutlineInputBorder(),
+                decoration: InputDecoration(
+                  labelText: 'Type your message...',
+                  hintText: 'Send a message to your provider',
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  enabledBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(8),
+                    borderSide: BorderSide(color: Colors.grey.shade300),
+                  ),
+                  focusedBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(8),
+                    borderSide: const BorderSide(
+                      color: Colors.deepPurple,
+                      width: 2,
+                    ),
+                  ),
+                  contentPadding: const EdgeInsets.symmetric(
+                    horizontal: 12,
+                    vertical: 12,
+                  ),
                 ),
-                minLines: 1,
-                maxLines: 3,
+                minLines: 2,
+                maxLines: 4,
               ),
-              const SizedBox(height: 8),
+              const SizedBox(height: 12),
               Row(
-                mainAxisAlignment: MainAxisAlignment.center,
+                mainAxisAlignment: MainAxisAlignment.end,
                 children: [
+                  OutlinedButton(
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: Colors.grey.shade700,
+                      side: BorderSide(color: Colors.grey.shade300),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 16,
+                        vertical: 8,
+                      ),
+                    ),
+                    child: const Text('Cancel'),
+                    onPressed: () async {
+                      // Mark provider messages as read (excluding those sent within 1 second)
+                      await _markProviderMessagesAsReadWithTimeLimit(
+                        DateTime.now(),
+                      );
+                      _reset();
+                    },
+                  ),
+                  const SizedBox(width: 12),
                   ElevatedButton(
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Colors.deepPurple,
+                      foregroundColor: Colors.white,
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 20,
+                        vertical: 8,
+                      ),
+                      elevation: 2,
+                    ),
                     child: const Text('Send'),
                     onPressed: () async {
                       final text = _controller.text.trim();
@@ -5142,354 +5703,154 @@ class _MessageInputWidgetState extends State<MessageInputWidget> {
                       _reset();
                     },
                   ),
-                  const SizedBox(width: 16),
-                  OutlinedButton(
-                    child: const Text('Cancel'),
-                    onPressed: () async {
-                      // Mark provider messages as read (excluding those sent within 1 second)
-                      await _markProviderMessagesAsReadWithTimeLimit(
-                        DateTime.now(),
-                      );
-                      _reset();
-                    },
+                ],
+              ),
+              const SizedBox(height: 16),
+              const Divider(),
+              const SizedBox(height: 8),
+              Row(
+                children: [
+                  Icon(Icons.history, color: Colors.grey.shade600, size: 20),
+                  const SizedBox(width: 8),
+                  Text(
+                    'Message History',
+                    style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                      fontWeight: FontWeight.w600,
+                      color: Colors.grey.shade700,
+                    ),
                   ),
                 ],
               ),
               const SizedBox(height: 12),
-              Text(
-                'Message History:',
-                style: Theme.of(context).textTheme.titleMedium,
-              ),
-              const SizedBox(height: 8),
-              SizedBox(
-                height: 300, // Fixed height instead of Expanded
-                child: StreamBuilder<QuerySnapshot>(
-                  stream:
-                      FirebaseFirestore.instance
-                          .collection('messages')
-                          .where('userId', isEqualTo: widget.user.uid)
-                          .orderBy('timestamp', descending: true)
-                          .snapshots(),
-                  builder: (context, snapshot) {
-                    if (snapshot.connectionState == ConnectionState.waiting) {
-                      return const Center(child: CircularProgressIndicator());
-                    }
-                    if (snapshot.hasError) {
-                      // If Firestore index error, fallback to unordered
-                      return StreamBuilder<QuerySnapshot>(
-                        stream:
-                            FirebaseFirestore.instance
-                                .collection('messages')
-                                .where('userId', isEqualTo: widget.user.uid)
-                                .snapshots(),
-                        builder: (context, snap2) {
-                          if (snap2.connectionState ==
-                              ConnectionState.waiting) {
-                            return const Center(
-                              child: CircularProgressIndicator(),
-                            );
-                          }
-                          if (!snap2.hasData) {
-                            return const Text('No messages found.');
-                          }
-                          final docs =
-                              snap2.data!.docs
-                                  .where(
-                                    (d) =>
-                                        (d.data()
-                                            as Map<
-                                              String,
-                                              dynamic
-                                            >?)?['timestamp'] !=
-                                        null,
-                                  )
-                                  .toList();
-                          if (docs.isEmpty) {
-                            return const Text('No messages sent yet.');
-                          }
-                          docs.sort((a, b) {
-                            dynamic ta =
-                                (a.data() as Map<String, dynamic>)['timestamp'];
-                            dynamic tb =
-                                (b.data() as Map<String, dynamic>)['timestamp'];
-                            DateTime? dta;
-                            DateTime? dtb;
-                            if (ta is Timestamp) {
-                              dta = ta.toDate();
-                            } else if (ta is String) {
-                              try {
-                                dta = DateTime.parse(ta);
-                              } catch (_) {}
+              Container(
+                height: 400,
+                decoration: BoxDecoration(
+                  border: Border.all(color: Colors.grey.shade200),
+                  borderRadius: BorderRadius.circular(8),
+                  color: Colors.grey.shade50,
+                ),
+                child: Padding(
+                  padding: const EdgeInsets.all(8.0),
+                  child: StreamBuilder<QuerySnapshot>(
+                    stream:
+                        FirebaseFirestore.instance
+                            .collection('messages')
+                            .where('userId', isEqualTo: widget.user.uid)
+                            .orderBy('timestamp', descending: true)
+                            .snapshots(),
+                    builder: (context, snapshot) {
+                      if (snapshot.connectionState == ConnectionState.waiting) {
+                        return const Center(
+                          child: Padding(
+                            padding: EdgeInsets.all(20.0),
+                            child: CircularProgressIndicator(),
+                          ),
+                        );
+                      }
+                      if (snapshot.hasError) {
+                        // If Firestore index error, fallback to unordered
+                        return StreamBuilder<QuerySnapshot>(
+                          stream:
+                              FirebaseFirestore.instance
+                                  .collection('messages')
+                                  .where('userId', isEqualTo: widget.user.uid)
+                                  .snapshots(),
+                          builder: (context, snap2) {
+                            if (snap2.connectionState ==
+                                ConnectionState.waiting) {
+                              return const Center(
+                                child: CircularProgressIndicator(),
+                              );
                             }
-                            if (tb is Timestamp) {
-                              dtb = tb.toDate();
-                            } else if (tb is String) {
-                              try {
-                                dtb = DateTime.parse(tb);
-                              } catch (_) {}
+                            if (!snap2.hasData) {
+                              return const Center(
+                                child: Text(
+                                  'No messages found.',
+                                  style: TextStyle(color: Colors.grey),
+                                ),
+                              );
                             }
-                            if (dtb == null && dta == null) return 0;
-                            if (dtb == null) return -1;
-                            if (dta == null) return 1;
-                            return dtb.compareTo(dta);
-                          });
-                          return ListView.builder(
-                            itemCount: docs.length,
-                            itemBuilder: (context, idx) {
-                              final data =
-                                  docs[idx].data() as Map<String, dynamic>? ??
-                                  {};
-                              final msg = data['message'] ?? '';
-                              final ts = data['timestamp'] ?? '';
-                              // Robustly parse fromProvider field
-                              bool fromProvider = false;
-                              if (data.containsKey('fromAdmin')) {
-                                final raw = data['fromAdmin'];
-                                if (raw is bool) {
-                                  fromProvider = raw;
-                                } else if (raw is String) {
-                                  fromProvider = raw.toLowerCase() == 'true';
-                                } else if (raw is int) {
-                                  fromProvider = raw == 1;
-                                }
-                              }
-                              DateTime? dt;
-                              if (ts is Timestamp) {
-                                dt = ts.toDate();
-                              } else if (ts is String) {
+                            final docs =
+                                snap2.data!.docs
+                                    .where(
+                                      (d) =>
+                                          (d.data()
+                                              as Map<
+                                                String,
+                                                dynamic
+                                              >?)?['timestamp'] !=
+                                          null,
+                                    )
+                                    .toList();
+                            if (docs.isEmpty) {
+                              return const Center(
+                                child: Text(
+                                  'No messages sent yet.',
+                                  style: TextStyle(color: Colors.grey),
+                                ),
+                              );
+                            }
+                            docs.sort((a, b) {
+                              dynamic ta =
+                                  (a.data()
+                                      as Map<String, dynamic>)['timestamp'];
+                              dynamic tb =
+                                  (b.data()
+                                      as Map<String, dynamic>)['timestamp'];
+                              DateTime? dta;
+                              DateTime? dtb;
+                              if (ta is Timestamp) {
+                                dta = ta.toDate();
+                              } else if (ta is String) {
                                 try {
-                                  dt = DateTime.parse(ts);
+                                  dta = DateTime.parse(ta);
                                 } catch (_) {}
                               }
-                              final formatted =
-                                  dt != null
-                                      ? '${dt.year}-${dt.month.toString().padLeft(2, '0')}-${dt.day.toString().padLeft(2, '0')} ${dt.hour.toString().padLeft(2, '0')}:${dt.minute.toString().padLeft(2, '0')}'
-                                      : ts.toString();
-                              if (fromProvider) {
-                                // Provider message: left-aligned, blue background
-                                return Align(
-                                  alignment: Alignment.centerLeft,
-                                  child: Container(
-                                    margin: const EdgeInsets.symmetric(
-                                      vertical: 2,
-                                      horizontal: 8,
-                                    ),
-                                    padding: const EdgeInsets.symmetric(
-                                      vertical: 6,
-                                      horizontal: 12,
-                                    ),
-                                    decoration: BoxDecoration(
-                                      color: Colors.blue[50],
-                                      borderRadius: BorderRadius.circular(12),
-                                      border: Border.all(
-                                        color: Colors.blue,
-                                        width: 0.5,
-                                      ),
-                                    ),
-                                    child: RichText(
-                                      text: TextSpan(
-                                        style: const TextStyle(
-                                          fontSize: 14,
-                                          color: Colors.black,
-                                        ),
-                                        children: [
-                                          TextSpan(
-                                            text: msg.isEmpty ? '(nudge)' : msg,
-                                          ),
-                                          TextSpan(
-                                            text:
-                                                ' sent by Provider at $formatted',
-                                            style: const TextStyle(
-                                              fontSize: 12,
-                                              color: Colors.blue,
-                                              fontStyle: FontStyle.italic,
-                                            ),
-                                          ),
-                                        ],
-                                      ),
-                                    ),
-                                  ),
-                                );
-                              } else {
-                                // User message: right-aligned, purple background
-                                return Align(
-                                  alignment: Alignment.centerRight,
-                                  child: Container(
-                                    margin: const EdgeInsets.symmetric(
-                                      vertical: 2,
-                                      horizontal: 8,
-                                    ),
-                                    padding: const EdgeInsets.symmetric(
-                                      vertical: 6,
-                                      horizontal: 12,
-                                    ),
-                                    decoration: BoxDecoration(
-                                      color: Colors.deepPurple[50],
-                                      borderRadius: BorderRadius.circular(12),
-                                      border: Border.all(
-                                        color: Colors.deepPurple,
-                                        width: 0.5,
-                                      ),
-                                    ),
-                                    child: RichText(
-                                      text: TextSpan(
-                                        style: const TextStyle(
-                                          fontSize: 14,
-                                          color: Colors.black,
-                                        ),
-                                        children: [
-                                          TextSpan(
-                                            text: msg.isEmpty ? '(nudge)' : msg,
-                                          ),
-                                          TextSpan(
-                                            text: ' sent by You at $formatted',
-                                            style: const TextStyle(
-                                              fontSize: 12,
-                                              color: Colors.deepPurple,
-                                              fontStyle: FontStyle.italic,
-                                            ),
-                                          ),
-                                        ],
-                                      ),
-                                    ),
-                                  ),
-                                );
+                              if (tb is Timestamp) {
+                                dtb = tb.toDate();
+                              } else if (tb is String) {
+                                try {
+                                  dtb = DateTime.parse(tb);
+                                } catch (_) {}
                               }
-                            },
-                          );
-                        },
+                              if (dtb == null && dta == null) return 0;
+                              if (dtb == null) return -1;
+                              if (dta == null) return 1;
+                              return dtb.compareTo(dta);
+                            });
+                            return ListView.builder(
+                              itemCount: docs.length,
+                              itemBuilder:
+                                  (context, idx) =>
+                                      _buildMessageBubble(docs[idx]),
+                            );
+                          },
+                        );
+                      }
+                      if (!snapshot.hasData) {
+                        return const Center(
+                          child: Text(
+                            'No messages found.',
+                            style: TextStyle(color: Colors.grey),
+                          ),
+                        );
+                      }
+                      final docs = snapshot.data!.docs;
+                      if (docs.isEmpty) {
+                        return const Center(
+                          child: Text(
+                            'No messages sent yet.',
+                            style: TextStyle(color: Colors.grey),
+                          ),
+                        );
+                      }
+                      return ListView.builder(
+                        itemCount: docs.length,
+                        itemBuilder:
+                            (context, idx) => _buildMessageBubble(docs[idx]),
                       );
-                    }
-                    if (!snapshot.hasData) {
-                      return const Text('No messages found.');
-                    }
-                    final docs = snapshot.data!.docs;
-                    if (docs.isEmpty) {
-                      return const Text('No messages sent yet.');
-                    }
-                    return ListView.builder(
-                      itemCount: docs.length,
-                      itemBuilder: (context, idx) {
-                        final data =
-                            docs[idx].data() as Map<String, dynamic>? ?? {};
-                        final msg = data['message'] ?? '';
-                        final ts = data['timestamp'] ?? '';
-                        // Robustly parse fromProvider field
-                        bool fromProvider = false;
-                        if (data.containsKey('fromAdmin')) {
-                          final raw = data['fromAdmin'];
-                          if (raw is bool) {
-                            fromProvider = raw;
-                          } else if (raw is String) {
-                            fromProvider = raw.toLowerCase() == 'true';
-                          } else if (raw is int) {
-                            fromProvider = raw == 1;
-                          }
-                        }
-                        DateTime? dt;
-                        if (ts is Timestamp) {
-                          dt = ts.toDate();
-                        } else if (ts is String) {
-                          try {
-                            dt = DateTime.parse(ts);
-                          } catch (_) {}
-                        }
-                        final formatted =
-                            dt != null
-                                ? '${dt.year}-${dt.month.toString().padLeft(2, '0')}-${dt.day.toString().padLeft(2, '0')} ${dt.hour.toString().padLeft(2, '0')}:${dt.minute.toString().padLeft(2, '0')}'
-                                : ts.toString();
-                        if (fromProvider) {
-                          // Provider message: left-aligned, blue background
-                          return Align(
-                            alignment: Alignment.centerLeft,
-                            child: Container(
-                              margin: const EdgeInsets.symmetric(
-                                vertical: 2,
-                                horizontal: 8,
-                              ),
-                              padding: const EdgeInsets.symmetric(
-                                vertical: 6,
-                                horizontal: 12,
-                              ),
-                              decoration: BoxDecoration(
-                                color: Colors.blue[50],
-                                borderRadius: BorderRadius.circular(12),
-                                border: Border.all(
-                                  color: Colors.blue,
-                                  width: 0.5,
-                                ),
-                              ),
-                              child: RichText(
-                                text: TextSpan(
-                                  style: const TextStyle(
-                                    fontSize: 14,
-                                    color: Colors.black,
-                                  ),
-                                  children: [
-                                    TextSpan(
-                                      text: msg.isEmpty ? '(nudge)' : msg,
-                                    ),
-                                    TextSpan(
-                                      text: ', sent by Provider at $formatted',
-                                      style: const TextStyle(
-                                        fontSize: 12,
-                                        color: Colors.blue,
-                                        fontStyle: FontStyle.italic,
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                              ),
-                            ),
-                          );
-                        } else {
-                          // User message: right-aligned, purple background
-                          return Align(
-                            alignment: Alignment.centerRight,
-                            child: Container(
-                              margin: const EdgeInsets.symmetric(
-                                vertical: 2,
-                                horizontal: 8,
-                              ),
-                              padding: const EdgeInsets.symmetric(
-                                vertical: 6,
-                                horizontal: 12,
-                              ),
-                              decoration: BoxDecoration(
-                                color: Colors.deepPurple[50],
-                                borderRadius: BorderRadius.circular(12),
-                                border: Border.all(
-                                  color: Colors.deepPurple,
-                                  width: 0.5,
-                                ),
-                              ),
-                              child: RichText(
-                                text: TextSpan(
-                                  style: const TextStyle(
-                                    fontSize: 14,
-                                    color: Colors.black,
-                                  ),
-                                  children: [
-                                    TextSpan(
-                                      text: msg.isEmpty ? '(nudge)' : msg,
-                                    ),
-                                    TextSpan(
-                                      text: ', sent by You at $formatted',
-                                      style: const TextStyle(
-                                        fontSize: 12,
-                                        color: Colors.deepPurple,
-                                        fontStyle: FontStyle.italic,
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                              ),
-                            ),
-                          );
-                        }
-                      },
-                    );
-                  },
+                    },
+                  ),
                 ),
               ),
             ],
@@ -5498,5 +5859,100 @@ class _MessageInputWidgetState extends State<MessageInputWidget> {
       );
     }
     return Column(children: children);
+  }
+
+  Widget _buildMessageBubble(QueryDocumentSnapshot doc) {
+    final data = doc.data() as Map<String, dynamic>? ?? {};
+    final msg = data['message'] ?? '';
+    final ts = data['timestamp'] ?? '';
+
+    // Robustly parse fromProvider field
+    bool fromProvider = false;
+    if (data.containsKey('fromAdmin')) {
+      final raw = data['fromAdmin'];
+      if (raw is bool) {
+        fromProvider = raw;
+      } else if (raw is String) {
+        fromProvider = raw.toLowerCase() == 'true';
+      } else if (raw is int) {
+        fromProvider = raw == 1;
+      }
+    }
+
+    DateTime? dt;
+    if (ts is Timestamp) {
+      dt = ts.toDate();
+    } else if (ts is String) {
+      try {
+        dt = DateTime.parse(ts);
+      } catch (_) {}
+    }
+
+    final formatted =
+        dt != null
+            ? '${dt.year}-${dt.month.toString().padLeft(2, '0')}-${dt.day.toString().padLeft(2, '0')} ${dt.hour.toString().padLeft(2, '0')}:${dt.minute.toString().padLeft(2, '0')}'
+            : ts.toString();
+
+    if (fromProvider) {
+      // Provider message: left-aligned, blue background
+      return Align(
+        alignment: Alignment.centerLeft,
+        child: Container(
+          margin: const EdgeInsets.symmetric(vertical: 2, horizontal: 8),
+          padding: const EdgeInsets.symmetric(vertical: 6, horizontal: 12),
+          decoration: BoxDecoration(
+            color: Colors.blue[50],
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: Colors.blue, width: 0.5),
+          ),
+          child: RichText(
+            text: TextSpan(
+              style: const TextStyle(fontSize: 14, color: Colors.black),
+              children: [
+                TextSpan(text: msg.isEmpty ? '(nudge)' : msg),
+                TextSpan(
+                  text: ' sent by Provider at $formatted',
+                  style: const TextStyle(
+                    fontSize: 12,
+                    color: Colors.blue,
+                    fontStyle: FontStyle.italic,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      );
+    } else {
+      // User message: right-aligned, purple background
+      return Align(
+        alignment: Alignment.centerRight,
+        child: Container(
+          margin: const EdgeInsets.symmetric(vertical: 2, horizontal: 8),
+          padding: const EdgeInsets.symmetric(vertical: 6, horizontal: 12),
+          decoration: BoxDecoration(
+            color: Colors.deepPurple[50],
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: Colors.deepPurple, width: 0.5),
+          ),
+          child: RichText(
+            text: TextSpan(
+              style: const TextStyle(fontSize: 14, color: Colors.black),
+              children: [
+                TextSpan(text: msg.isEmpty ? '(nudge)' : msg),
+                TextSpan(
+                  text: ' sent by You at $formatted',
+                  style: const TextStyle(
+                    fontSize: 12,
+                    color: Colors.deepPurple,
+                    fontStyle: FontStyle.italic,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      );
+    }
   }
 }
