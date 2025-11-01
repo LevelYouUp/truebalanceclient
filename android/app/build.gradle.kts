@@ -10,7 +10,7 @@ plugins {
 
 android {
     namespace = "com.example.truebalanceclient"
-    compileSdk = flutter.compileSdkVersion
+    compileSdk = 35
     ndkVersion = "27.0.12077973"
 
     compileOptions {
@@ -30,7 +30,7 @@ android {
         // You can update the following values to match your application needs.
         // For more information, see: https://flutter.dev/to/review-gradle-config.
         minSdk = 23
-        targetSdk = flutter.targetSdkVersion
+        targetSdk = 35
         versionCode = flutter.versionCode
         versionName = flutter.versionName
     }
@@ -46,6 +46,20 @@ android {
 
 flutter {
     source = "../.."
+}
+
+configurations.all {
+    resolutionStrategy {
+        force("androidx.media3:media3-exoplayer:1.3.1")
+        force("androidx.media3:media3-common:1.3.1")
+        force("androidx.media3:media3-extractor:1.3.1")
+        force("androidx.media3:media3-exoplayer-hls:1.3.1")
+        force("androidx.media3:media3-exoplayer-dash:1.3.1")
+        force("androidx.media3:media3-exoplayer-rtsp:1.3.1")
+        force("androidx.media3:media3-exoplayer-smoothstreaming:1.3.1")
+        force("androidx.media3:media3-datasource:1.3.1")
+        force("androidx.media3:media3-decoder:1.3.1")
+    }
 }
 
 dependencies {

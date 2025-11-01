@@ -5002,6 +5002,9 @@ class _FullWidthMessageInputState extends State<FullWidthMessageInput> {
       width: MediaQuery.of(context).size.width - 32,
       margin: const EdgeInsets.symmetric(horizontal: 0.0),
       padding: const EdgeInsets.all(16.0),
+      constraints: BoxConstraints(
+        maxHeight: MediaQuery.of(context).size.height * 0.8,
+      ),
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(12),
@@ -5015,9 +5018,10 @@ class _FullWidthMessageInputState extends State<FullWidthMessageInput> {
           ),
         ],
       ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
+      child: SingleChildScrollView(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
           TextField(
             controller: _controller,
             decoration: InputDecoration(
@@ -5150,7 +5154,11 @@ class _FullWidthMessageInputState extends State<FullWidthMessageInput> {
           ),
           const SizedBox(height: 12),
           Container(
-            height: 400,
+            height: MediaQuery.of(context).size.height * 0.4,
+            constraints: const BoxConstraints(
+              minHeight: 200,
+              maxHeight: 400,
+            ),
             decoration: BoxDecoration(
               border: Border.all(color: Colors.grey.shade200),
               borderRadius: BorderRadius.circular(8),
@@ -5290,6 +5298,7 @@ class _FullWidthMessageInputState extends State<FullWidthMessageInput> {
             ),
           ),
         ],
+        ),
       ),
     );
   }
@@ -5723,7 +5732,11 @@ class _MessageInputWidgetState extends State<MessageInputWidget> {
               ),
               const SizedBox(height: 12),
               Container(
-                height: 400,
+                height: MediaQuery.of(context).size.height * 0.4,
+                constraints: const BoxConstraints(
+                  minHeight: 200,
+                  maxHeight: 400,
+                ),
                 decoration: BoxDecoration(
                   border: Border.all(color: Colors.grey.shade200),
                   borderRadius: BorderRadius.circular(8),
