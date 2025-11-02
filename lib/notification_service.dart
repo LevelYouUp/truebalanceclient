@@ -45,8 +45,31 @@ class NotificationService {
       onDidReceiveNotificationResponse: _onNotificationTapped,
     );
 
-    // Request permissions for iOS
+    // Request permissions for both Android 13+ and iOS
+    await requestPermissions();
+  }
+
+  // Request notification permissions (Android 13+ and iOS)
+  static Future<bool> requestPermissions() async {
+    if (kIsWeb) return false;
+
+    // Request Android notification permission (Android 13+)
+    final androidImplementation = _notificationsPlugin.resolvePlatformSpecificImplementation<
+        AndroidFlutterLocalNotificationsPlugin>();
+    
+    if (androidImplementation != null) {
+      final granted = await androidImplementation.requestNotificationsPermission();
+      print('Android notification permission granted: $granted');
+      if (granted == null || !granted) {
+        print('User denied notification permission on Android');
+        return false;
+      }
+    }
+
+    // Request iOS permissions
     await _requestIOSPermissions();
+    
+    return true;
   }
 
   // Request iOS permissions
@@ -66,12 +89,41 @@ class NotificationService {
     print('Notification tapped: ${response.payload}');
   }
 
+  // Check if notification permissions are granted
+  static Future<bool> areNotificationsEnabled() async {
+    if (kIsWeb) return false;
+
+    // Check Android permission status
+    final androidImplementation = _notificationsPlugin.resolvePlatformSpecificImplementation<
+        AndroidFlutterLocalNotificationsPlugin>();
+    
+    if (androidImplementation != null) {
+      final granted = await androidImplementation.areNotificationsEnabled();
+      return granted ?? false;
+    }
+
+    // For iOS, assume granted after initialization
+    return true;
+  }
+
   // Show exercise reminder notification
   static Future<void> showExerciseReminder() async {
     if (kIsWeb) {
       print('Notifications not supported on web platform');
       return;
     }
+
+    // Check and request permissions if needed
+    final hasPermission = await areNotificationsEnabled();
+    if (!hasPermission) {
+      print('Requesting notification permissions...');
+      final granted = await requestPermissions();
+      if (!granted) {
+        print('Cannot show notification - permission denied');
+        return;
+      }
+    }
+
     const AndroidNotificationDetails androidDetails =
         AndroidNotificationDetails(
           'exercise_reminders',
@@ -100,6 +152,8 @@ class NotificationService {
       details,
       payload: 'exercise_reminder',
     );
+
+    print('Notification shown successfully');
 
     // Record the notification time
     await _recordNotificationTime();

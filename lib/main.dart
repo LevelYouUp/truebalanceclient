@@ -8,6 +8,8 @@ import 'dart:convert';
 import 'firebase_options.dart';
 import 'exercise_video_player.dart';
 import 'exercise_reminder_manager.dart';
+import 'screens/home_screen.dart';
+import 'screens/messages_screen.dart';
 
 // Simple passcode validation service using encrypted passcode comparison
 class PasscodeService {
@@ -2904,1157 +2906,89 @@ class LineChartPainter extends CustomPainter {
   bool shouldRepaint(CustomPainter oldDelegate) => true;
 }
 
-class HomeScreen extends StatefulWidget {
-  const HomeScreen({super.key});
+class PlanTile extends StatefulWidget {
+  final String planId;
+  final VoidCallback? onExerciseCompleted;
+  
+  const PlanTile({
+    super.key,
+    required this.planId,
+    this.onExerciseCompleted,
+  });
 
   @override
-  State<HomeScreen> createState() => _HomeScreenState();
+  State<PlanTile> createState() => _PlanTileState();
 }
 
-class _HomeScreenState extends State<HomeScreen> {
-  // Track which exercise is currently showing congratulatory text
-  static String? _currentCongratulatoryExercise;
+class _PlanTileState extends State<PlanTile> {
+  bool? _isExpanded; // null means not yet determined
+  
+  // Check if an exercise was completed today
+  Future<bool> _wasExerciseCompletedToday(String exerciseId) async {
+    final userId = FirebaseAuth.instance.currentUser?.uid;
+    if (userId == null) return false;
 
-  @override
-  void initState() {
-    super.initState();
-    // Clear any congratulatory text when the screen initializes/refreshes
-    _currentCongratulatoryExercise = null;
-  }
-
-  // Helper method to check if user account is still active (for periodic checks)
-  Future<Map<String, dynamic>> _checkUserStillActiveDetailed(
-    String userId,
-  ) async {
     try {
-      final userDoc =
-          await FirebaseFirestore.instance
-              .collection('users')
-              .doc(userId)
-              .get();
+      final checkIns = await FirebaseFirestore.instance
+          .collection('exercise_check_ins')
+          .where('userId', isEqualTo: userId)
+          .where('exerciseId', isEqualTo: exerciseId)
+          .get();
 
-      if (!userDoc.exists) {
-        return {'isActive': false, 'reason': 'User document not found'};
-      }
+      if (checkIns.docs.isEmpty) return false;
 
-      final userData = userDoc.data() ?? {};
-
-      // Check active flag (default to true if not set for backward compatibility)
-      final isActive = userData['active'] ?? true;
-
-      if (!isActive) {
-        return {'isActive': false, 'reason': 'Account marked as inactive'};
-      }
-
-      // Check activeUntilTime if it exists
-      final activeUntilTime = userData['activeUntilTime'];
-      if (activeUntilTime != null) {
-        DateTime? expirationTime;
-
-        if (activeUntilTime is Timestamp) {
-          expirationTime = activeUntilTime.toDate();
-        } else if (activeUntilTime is String) {
-          try {
-            expirationTime = DateTime.parse(activeUntilTime);
-          } catch (e) {
-            // Invalid date format, treat as no expiration
-          }
-        }
-
-        if (expirationTime != null && DateTime.now().isAfter(expirationTime)) {
-          return {'isActive': false, 'reason': 'Account expired'};
-        }
-      }
-
-      // Check if provider verification is required
-      // Users who don't have 'activatedBy' field need provider passcode verification
-      // UNLESS they are providers themselves (isAdmin: true)
-      final activatedBy = userData['activatedBy'];
-      if (activatedBy == null || activatedBy.toString().trim().isEmpty) {
-        // Check if user is a provider - if so, they don't need external activation
-        final isAdmin = userData['isAdmin'] ?? false;
-        if (!isAdmin) {
-          return {
-            'isActive': false,
-            'reason': 'Provider verification required',
-          };
-        }
-        // Provider users are considered self-activated
-      }
-
-      return {'isActive': true, 'reason': 'Account is active and verified'};
-    } catch (e) {
-      return {'isActive': false, 'reason': 'Error checking account status: $e'};
-    }
-  }
-
-  // Helper method to get all exercise IDs from plans and direct assignments
-  Future<List<String>> _getAllExerciseIds(String userId) async {
-    final userDoc =
-        await FirebaseFirestore.instance.collection('users').doc(userId).get();
-
-    final userData = userDoc.data() ?? {};
-    final planIds = List<String>.from(userData['planIds'] ?? []);
-    final directExerciseIds = List<String>.from(userData['exerciseIds'] ?? []);
-
-    Set<String> allExerciseIds = directExerciseIds.toSet();
-
-    // Get exercises from plans
-    for (String planId in planIds) {
-      final planDoc =
-          await FirebaseFirestore.instance
-              .collection('plans')
-              .doc(planId)
-              .get();
-
-      final planData = planDoc.data() ?? {};
-
-      // Handle both old and new data structures
-      if (planData.containsKey('exercises') && planData['exercises'] is List) {
-        final exercisesList = List<Map<String, dynamic>>.from(
-          (planData['exercises'] as List).map((e) => e as Map<String, dynamic>),
-        );
-        for (var exercise in exercisesList) {
-          if (exercise['exerciseId'] != null) {
-            allExerciseIds.add(exercise['exerciseId'] as String);
-          }
-        }
-      } else if (planData.containsKey('exerciseIds') &&
-          planData['exerciseIds'] is List) {
-        final exerciseIds = List<String>.from(planData['exerciseIds'] ?? []);
-        allExerciseIds.addAll(exerciseIds);
-      }
-    }
-
-    return allExerciseIds.toList();
-  }
-
-  // Helper method to get last check-in time across all exercises
-  Future<DateTime?> _getLastCheckInTime(
-    String userId,
-    List<String> exerciseIds,
-  ) async {
-    if (exerciseIds.isEmpty) return null;
-
-    final checkInsQuery =
-        await FirebaseFirestore.instance
-            .collection('exercise_check_ins')
-            .where('userId', isEqualTo: userId)
-            .where(
-              'exerciseId',
-              whereIn: exerciseIds.take(10).toList(),
-            ) // Firestore limit
-            .get();
-
-    DateTime? latestCheckIn;
-
-    for (var doc in checkInsQuery.docs) {
-      final data = doc.data();
-      final timestamp = data['timestamp'];
-
-      DateTime? checkInTime;
-      if (timestamp is Timestamp) {
-        checkInTime = timestamp.toDate();
-      }
-
-      if (checkInTime != null) {
-        if (latestCheckIn == null || checkInTime.isAfter(latestCheckIn)) {
-          latestCheckIn = checkInTime;
-        }
-      }
-    }
-
-    // If we have more than 10 exercises, check the remaining ones
-    if (exerciseIds.length > 10) {
-      for (int i = 10; i < exerciseIds.length; i += 10) {
-        final batch = exerciseIds.skip(i).take(10).toList();
-        final batchQuery =
-            await FirebaseFirestore.instance
-                .collection('exercise_check_ins')
-                .where('userId', isEqualTo: userId)
-                .where('exerciseId', whereIn: batch)
-                .get();
-
-        for (var doc in batchQuery.docs) {
-          final data = doc.data();
-          final timestamp = data['timestamp'];
-
-          DateTime? checkInTime;
-          if (timestamp is Timestamp) {
-            checkInTime = timestamp.toDate();
-          }
-
-          if (checkInTime != null) {
-            if (latestCheckIn == null || checkInTime.isAfter(latestCheckIn)) {
-              latestCheckIn = checkInTime;
-            }
-          }
-        }
-      }
-    }
-
-    return latestCheckIn;
-  }
-
-  // Helper method to format time difference
-  String _formatTimeDifference(DateTime lastTime) {
-    final now = DateTime.now();
-    final difference = now.difference(lastTime);
-
-    if (difference.inDays >= 14) {
-      final weeks = (difference.inDays / 7).floor();
-      return weeks == 1 ? 'a week' : '$weeks weeks';
-    } else if (difference.inDays >= 1) {
-      return difference.inDays == 1 ? 'a day' : '${difference.inDays} days';
-    } else if (difference.inHours >= 1) {
-      if (difference.inHours == 1) {
-        return 'an hour';
-      } else if (difference.inMinutes <= 90) {
-        return 'an hour and a half';
-      } else {
-        return '${difference.inHours} hours';
-      }
-    } else if (difference.inMinutes >= 30) {
-      return 'half an hour';
-    } else if (difference.inMinutes >= 1) {
-      return '${difference.inMinutes} minutes';
-    } else {
-      return 'moments';
-    }
-  }
-
-  // Helper method to get exercise status message
-  Future<String> _getExerciseStatusMessage(String userId) async {
-    try {
-      final allExerciseIds = await _getAllExerciseIds(userId);
-
-      if (allExerciseIds.isEmpty) {
-        return '';
-      }
-
-      final lastCheckIn = await _getLastCheckInTime(userId, allExerciseIds);
-
-      if (lastCheckIn == null) {
-        // No check-ins yet
-        final count = allExerciseIds.length;
-        if (count == 1) {
-          return '1 new exercise is ready for you!';
-        } else {
-          return '$count new exercises are ready for you!';
-        }
-      } else {
-        // Has check-ins, show time since last
-        final timeDiff = _formatTimeDifference(lastCheckIn);
-        return "It's been $timeDiff since your last set";
-      }
-    } catch (e) {
-      return '';
-    }
-  }
-
-  // Helper method to get unread provider messages count and latest timestamp
-  Future<Map<String, dynamic>> _getUnreadMessageInfo(String userId) async {
-    try {
-      final messagesQuery =
-          await FirebaseFirestore.instance
-              .collection('messages')
-              .where('userId', isEqualTo: userId)
-              .where('fromAdmin', isEqualTo: true)
-              .get();
-
-      final unreadMessages =
-          messagesQuery.docs.where((doc) {
-            final data = doc.data();
-            // Consider unread if read field doesn't exist or is false
-            return !data.containsKey('read') || data['read'] != true;
-          }).toList();
-
-      final unreadCount = unreadMessages.length;
-
-      if (unreadCount == 0) {
-        return {'count': 0, 'latestTimestamp': null};
-      }
-
-      // Find the latest unread message timestamp
-      DateTime? latestTimestamp;
-      for (var doc in unreadMessages) {
+      // Find the latest check-in
+      DateTime? lastCheckIn;
+      for (var doc in checkIns.docs) {
         final data = doc.data();
         final timestamp = data['timestamp'];
-
-        DateTime? messageTime;
         if (timestamp is Timestamp) {
-          messageTime = timestamp.toDate();
-        } else if (timestamp is String) {
-          try {
-            messageTime = DateTime.parse(timestamp);
-          } catch (_) {}
-        }
-
-        if (messageTime != null) {
-          if (latestTimestamp == null || messageTime.isAfter(latestTimestamp)) {
-            latestTimestamp = messageTime;
+          final checkInDate = timestamp.toDate();
+          if (lastCheckIn == null || checkInDate.isAfter(lastCheckIn)) {
+            lastCheckIn = checkInDate;
           }
         }
       }
 
-      return {'count': unreadCount, 'latestTimestamp': latestTimestamp};
+      if (lastCheckIn == null) return false;
+
+      // Check if it was today
+      final now = DateTime.now();
+      return lastCheckIn.year == now.year &&
+          lastCheckIn.month == now.month &&
+          lastCheckIn.day == now.day;
     } catch (e) {
-      return {'count': 0, 'latestTimestamp': null};
+      return false;
     }
   }
 
-  // Helper method to mark all provider messages as read
-  Future<void> _markProviderMessagesAsRead(String userId) async {
-    try {
-      final unreadMessagesQuery =
-          await FirebaseFirestore.instance
-              .collection('messages')
-              .where('userId', isEqualTo: userId)
-              .where('fromAdmin', isEqualTo: true)
-              .get();
+  // Determine if the plan should be expanded by default
+  Future<bool> _shouldBeExpandedByDefault(List<Map<String, dynamic>> exerciseData) async {
+    if (exerciseData.isEmpty) return false;
 
-      final batch = FirebaseFirestore.instance.batch();
-
-      for (var doc in unreadMessagesQuery.docs) {
-        final data = doc.data();
-        // Only update if read field doesn't exist or is false
-        if (!data.containsKey('read') || data['read'] != true) {
-          batch.update(doc.reference, {'read': true});
+    // Check each exercise to see if any are not done today
+    for (var data in exerciseData) {
+      final exerciseId = data['exerciseId'] as String?;
+      if (exerciseId != null) {
+        final doneToday = await _wasExerciseCompletedToday(exerciseId);
+        if (!doneToday) {
+          // Found at least one incomplete exercise
+          return true;
         }
       }
-
-      await batch.commit();
-    } catch (e) {
-      // Handle error silently
     }
+
+    // All exercises are done today, should be collapsed
+    return false;
   }
 
-  // Helper method to format time since message
-  String _formatMessageTime(DateTime messageTime) {
-    final now = DateTime.now();
-    final difference = now.difference(messageTime);
-
-    if (difference.inDays >= 1) {
-      return difference.inDays == 1
-          ? 'yesterday'
-          : '${difference.inDays} days ago';
-    } else if (difference.inHours >= 1) {
-      return difference.inHours == 1
-          ? 'an hour ago'
-          : '${difference.inHours} hours ago';
-    } else if (difference.inMinutes >= 5) {
-      return '${difference.inMinutes} minutes ago';
-    } else if (difference.inMinutes >= 1) {
-      return 'a few minutes ago';
-    } else {
-      return 'just now';
-    }
-  }
-
-  // Pain tracking methods
-  Future<void> _showAddPainLevelDialog(
-    BuildContext context,
-    String userId,
-  ) async {
-    int selectedPainLevel = 5;
-    final TextEditingController notesController = TextEditingController();
-
-    return showDialog<void>(
-      context: context,
-      barrierDismissible: false,
-      builder: (BuildContext context) {
-        return StatefulBuilder(
-          builder: (context, setState) {
-            return AlertDialog(
-              title: const Text('Add Pain Level'),
-              content: SingleChildScrollView(
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    const Text(
-                      'Rate your current pain level (1 = minimal, 10 = severe):',
-                      style: TextStyle(fontSize: 16),
-                    ),
-                    const SizedBox(height: 20),
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                      children: List.generate(10, (index) {
-                        final level = index + 1;
-                        return GestureDetector(
-                          onTap: () {
-                            setState(() {
-                              selectedPainLevel = level;
-                            });
-                          },
-                          child: Container(
-                            width: 30,
-                            height: 30,
-                            decoration: BoxDecoration(
-                              color:
-                                  selectedPainLevel == level
-                                      ? _getPainLevelColor(level)
-                                      : Colors.grey[300],
-                              border: Border.all(
-                                color:
-                                    selectedPainLevel == level
-                                        ? Colors.black
-                                        : Colors.grey,
-                                width: selectedPainLevel == level ? 2 : 1,
-                              ),
-                              borderRadius: BorderRadius.circular(15),
-                            ),
-                            child: Center(
-                              child: Text(
-                                level.toString(),
-                                style: TextStyle(
-                                  color:
-                                      selectedPainLevel == level
-                                          ? Colors.white
-                                          : Colors.black,
-                                  fontWeight: FontWeight.bold,
-                                ),
-                              ),
-                            ),
-                          ),
-                        );
-                      }),
-                    ),
-                    const SizedBox(height: 20),
-                    TextField(
-                      controller: notesController,
-                      decoration: const InputDecoration(
-                        labelText: 'Notes (optional)',
-                        border: OutlineInputBorder(),
-                        hintText: 'Describe your pain or activities...',
-                      ),
-                      maxLines: 3,
-                    ),
-                  ],
-                ),
-              ),
-              actions: [
-                TextButton(
-                  child: const Text('Cancel'),
-                  onPressed: () {
-                    Navigator.of(context).pop();
-                  },
-                ),
-                ElevatedButton(
-                  child: const Text('Save'),
-                  onPressed: () async {
-                    await _savePainLevel(
-                      userId,
-                      selectedPainLevel,
-                      notesController.text.trim(),
-                    );
-                    Navigator.of(context).pop();
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(
-                        content: Text('Pain level $selectedPainLevel recorded'),
-                      ),
-                    );
-                  },
-                ),
-              ],
-            );
-          },
-        );
-      },
-    );
-  }
-
-  Color _getPainLevelColor(int level) {
-    if (level <= 2) return Colors.green;
-    if (level <= 4) return Colors.lightGreen;
-    if (level <= 6) return Colors.yellow;
-    if (level <= 8) return Colors.orange;
-    return Colors.red;
-  }
-
-  Future<void> _savePainLevel(
-    String userId,
-    int painLevel,
-    String notes,
-  ) async {
-    try {
-      await FirebaseFirestore.instance.collection('painLevels').add({
-        'userId': userId,
-        'painLevel': painLevel,
-        'notes': notes,
-        'timestamp': FieldValue.serverTimestamp(),
-      });
-    } catch (e) {
-      print('Error saving pain level: $e');
-    }
-  }
-
-  void _showPainHistoryDialog(BuildContext context, String userId) {
-    showDialog(
-      context: context,
-      builder: (BuildContext context) {
-        return Dialog(
-          insetPadding: const EdgeInsets.all(16),
-          child: LayoutBuilder(
-            builder: (context, constraints) {
-              final screenHeight = MediaQuery.of(context).size.height;
-              final screenWidth = MediaQuery.of(context).size.width;
-
-              // Adjust dialog height based on screen orientation
-              final dialogHeight =
-                  screenHeight < screenWidth
-                      ? screenHeight *
-                          0.85 // Landscape - more compact
-                      : screenHeight * 0.8; // Portrait - standard
-
-              return Container(
-                width: double.maxFinite,
-                height: dialogHeight,
-                padding: const EdgeInsets.all(16),
-                child: PainHistoryView(userId: userId),
-              );
-            },
-          ),
-        );
-      },
-    );
-  }
-
-  // Notification settings dialog
-  void _showNotificationSettingsDialog(BuildContext context) {
-    showDialog(
-      context: context,
-      builder: (BuildContext context) {
-        return StatefulBuilder(
-          builder: (context, setState) {
-            return AlertDialog(
-              title: const Text('Exercise Reminder Settings'),
-              content: FutureBuilder<Map<String, dynamic>>(
-                future: () async {
-                  final isEnabled =
-                      await ExerciseReminderManager.areRemindersEnabled();
-                  final intervalHours =
-                      await ExerciseReminderManager.getNotificationIntervalHours();
-                  return {
-                    'isEnabled': isEnabled,
-                    'intervalHours': intervalHours,
-                  };
-                }(),
-                builder: (context, snapshot) {
-                  if (!snapshot.hasData) {
-                    return const CircularProgressIndicator();
-                  }
-
-                  final data = snapshot.data!;
-                  final isEnabled = data['isEnabled'] as bool;
-                  final intervalHours = data['intervalHours'] as int;
-
-                  return Column(
-                    mainAxisSize: MainAxisSize.min,
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      const Text(
-                        'Get reminders to complete your exercises if you haven\'t done them in the configured time period.',
-                        style: TextStyle(fontSize: 14),
-                      ),
-                      const SizedBox(height: 16),
-                      SwitchListTile(
-                        title: const Text('Enable Exercise Reminders'),
-                        subtitle: Text(
-                          isEnabled
-                              ? 'You will receive notifications'
-                              : 'No notifications will be sent',
-                        ),
-                        value: isEnabled,
-                        onChanged: (bool value) async {
-                          await ExerciseReminderManager.setRemindersEnabled(
-                            value,
-                          );
-                          setState(() {}); // Refresh the dialog
-                        },
-                      ),
-                      if (isEnabled) ...[
-                        const SizedBox(height: 16),
-                        const Text(
-                          'Remind me every:',
-                          style: TextStyle(
-                            fontSize: 16,
-                            fontWeight: FontWeight.w500,
-                          ),
-                        ),
-                        const SizedBox(height: 12),
-                        Container(
-                          width: double.infinity,
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 12,
-                            vertical: 8,
-                          ),
-                          decoration: BoxDecoration(
-                            border: Border.all(color: Colors.grey),
-                            borderRadius: BorderRadius.circular(8),
-                          ),
-                          child: DropdownButtonHideUnderline(
-                            child: DropdownButton<int>(
-                              value: intervalHours.clamp(1, 48),
-                              isExpanded: true,
-                              items: List.generate(48, (index) {
-                                final hours = index + 1;
-                                return DropdownMenuItem<int>(
-                                  value: hours,
-                                  child: Text(
-                                    hours == 1 ? '$hours hour' : '$hours hours',
-                                    style: const TextStyle(fontSize: 14),
-                                  ),
-                                );
-                              }),
-                              onChanged: (int? newHours) async {
-                                if (newHours != null) {
-                                  await ExerciseReminderManager.setNotificationIntervalHours(
-                                    newHours,
-                                  );
-                                  setState(() {}); // Refresh the dialog
-                                }
-                              },
-                            ),
-                          ),
-                        ),
-                        const SizedBox(height: 12),
-                        Text(
-                          'You will receive reminders every $intervalHours hour${intervalHours == 1 ? '' : 's'} after your most recent exercise.',
-                          style: const TextStyle(
-                            fontSize: 12,
-                            color: Colors.grey,
-                          ),
-                        ),
-                        const SizedBox(height: 16),
-                        Text(
-                          'ℹ️ Notifications will only be sent once per day and only if you have exercises assigned but haven\'t completed any in the last $intervalHours hours.',
-                          style: const TextStyle(
-                            fontSize: 12,
-                            color: Colors.grey,
-                          ),
-                        ),
-                        const SizedBox(height: 16),
-                        ElevatedButton.icon(
-                          icon: const Icon(Icons.notifications_active),
-                          label: const Text('Test Notification'),
-                          onPressed: () async {
-                            await ExerciseReminderManager.triggerTestNotification();
-                            Navigator.of(context).pop();
-                            ScaffoldMessenger.of(context).showSnackBar(
-                              const SnackBar(
-                                content: Text('Test notification sent!'),
-                              ),
-                            );
-                          },
-                        ),
-                      ],
-                    ],
-                  );
-                },
-              ),
-              actions: [
-                TextButton(
-                  child: const Text('Close'),
-                  onPressed: () {
-                    Navigator.of(context).pop();
-                  },
-                ),
-              ],
-            );
-          },
-        );
-      },
-    );
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final user = FirebaseAuth.instance.currentUser!;
-    return Scaffold(
-      appBar: AppBar(
-        backgroundColor: Theme.of(context).scaffoldBackgroundColor,
-        surfaceTintColor: Colors.transparent,
-        shadowColor: Colors.transparent,
-        elevation: 0,
-        scrolledUnderElevation: 0,
-        title: Image.asset(
-          'assets/images/TRUEBALANCE-PAINRELIEF_LOGO_DARK_2256x504.png',
-          height: 40,
-          fit: BoxFit.contain,
-          errorBuilder: (context, error, stackTrace) {
-            return const Text(
-              'TrueBalance Client',
-              style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
-            );
-          },
-        ),
-        centerTitle: true,
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.logout),
-            tooltip: 'Log out',
-            onPressed: () async {
-              await FirebaseAuth.instance.signOut();
-            },
-          ),
-        ],
-      ),
-      body: StreamBuilder<DocumentSnapshot>(
-        stream:
-            FirebaseFirestore.instance
-                .collection('users')
-                .doc(user.uid)
-                .snapshots(),
-        builder: (context, snapshot) {
-          if (!snapshot.hasData) {
-            return const Center(child: CircularProgressIndicator());
-          }
-          final userData = snapshot.data!.data() as Map<String, dynamic>? ?? {};
-
-          // Check if user is still active whenever user data changes
-          WidgetsBinding.instance.addPostFrameCallback((_) async {
-            final activeStatus = await _checkUserStillActiveDetailed(user.uid);
-            if (!activeStatus['isActive']) {
-              // User account has been deactivated, navigate to inactive user page
-              if (mounted) {
-                Navigator.of(context).pushAndRemoveUntil(
-                  MaterialPageRoute(
-                    builder:
-                        (context) =>
-                            InactiveUserPage(reason: activeStatus['reason']),
-                  ),
-                  (route) => false,
-                );
-              }
-            }
-          });
-
-          final planIds = List<String>.from(userData['planIds'] ?? []);
-          final exerciseIds = List<String>.from(userData['exerciseIds'] ?? []);
-          final name = (userData['name'] as String?)?.trim() ?? '';
-          final nameController = TextEditingController(text: name);
-
-          // If no plans and no exercises, show name display/edit above empty state
-          if (planIds.isEmpty && exerciseIds.isEmpty) {
-            return Column(
-              children: [
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(16, 32, 16, 0),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Row(
-                        children: [
-                          Expanded(
-                            child: Text(
-                              name.isNotEmpty
-                                  ? 'Hi $name!'
-                                  : 'Hi Anonymous User! What\'s your name?',
-                              style: const TextStyle(
-                                fontSize: 18,
-                                fontWeight: FontWeight.bold,
-                              ),
-                            ),
-                          ),
-                          // Only show edit button if no name is set
-                          if (name.isEmpty)
-                            IconButton(
-                              icon: const Icon(Icons.edit),
-                              tooltip: 'Set Name',
-                              onPressed: () {
-                                showDialog(
-                                  context: context,
-                                  builder: (ctx) {
-                                    return AlertDialog(
-                                      title: const Text('Set Your Name'),
-                                      content: TextField(
-                                        controller: nameController,
-                                        decoration: const InputDecoration(
-                                          labelText: 'Enter your name',
-                                        ),
-                                        autofocus: true,
-                                      ),
-                                      actions: [
-                                        TextButton(
-                                          child: const Text('Cancel'),
-                                          onPressed:
-                                              () => Navigator.of(ctx).pop(),
-                                        ),
-                                        ElevatedButton(
-                                          child: const Text('Save'),
-                                          onPressed: () async {
-                                            final newName =
-                                                nameController.text.trim();
-                                            if (newName.isNotEmpty) {
-                                              await FirebaseFirestore.instance
-                                                  .collection('users')
-                                                  .doc(user.uid)
-                                                  .set({
-                                                    'name': newName,
-                                                  }, SetOptions(merge: true));
-                                              Navigator.of(ctx).pop();
-                                              ScaffoldMessenger.of(
-                                                context,
-                                              ).showSnackBar(
-                                                SnackBar(
-                                                  content: Text(
-                                                    'Name set! To change it later, please message your provider.',
-                                                  ),
-                                                ),
-                                              );
-                                            }
-                                          },
-                                        ),
-                                      ],
-                                    );
-                                  },
-                                );
-                              },
-                            ),
-                        ],
-                      ),
-                    ],
-                  ),
-                ),
-                Expanded(
-                  child: Center(
-                    child: SingleChildScrollView(
-                      padding: const EdgeInsets.symmetric(horizontal: 20.0),
-                      child: Column(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          const Icon(
-                            Icons.info_outline,
-                            size: 64,
-                            color: Colors.grey,
-                          ),
-                          const SizedBox(height: 16),
-                          Text(
-                            'You have no assigned plans or exercises yet.',
-                            style: const TextStyle(
-                              fontSize: 18,
-                              color: Colors.grey,
-                            ),
-                            textAlign: TextAlign.center,
-                          ),
-                          const SizedBox(height: 24),
-                          // Pain tracking buttons
-                          ConstrainedBox(
-                            constraints: const BoxConstraints(maxWidth: 400),
-                            child: Row(
-                              children: [
-                                Expanded(
-                                  child: ElevatedButton.icon(
-                                    icon: const Icon(Icons.add_circle_outline),
-                                    label: const Text(
-                                      'Add Pain Level',
-                                      textAlign: TextAlign.center,
-                                    ),
-                                    style: ElevatedButton.styleFrom(
-                                      padding: const EdgeInsets.symmetric(
-                                        vertical: 12,
-                                        horizontal: 8,
-                                      ),
-                                    ),
-                                    onPressed: () async {
-                                      await _showAddPainLevelDialog(
-                                        context,
-                                        user.uid,
-                                      );
-                                    },
-                                  ),
-                                ),
-                                const SizedBox(width: 8),
-                                Expanded(
-                                  child: ElevatedButton.icon(
-                                    icon: const Icon(Icons.history),
-                                    label: const Text(
-                                      'View Pain History',
-                                      textAlign: TextAlign.center,
-                                    ),
-                                    style: ElevatedButton.styleFrom(
-                                      padding: const EdgeInsets.symmetric(
-                                        vertical: 12,
-                                        horizontal: 8,
-                                      ),
-                                    ),
-                                    onPressed: () {
-                                      _showPainHistoryDialog(context, user.uid);
-                                    },
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                          const SizedBox(height: 16),
-                          // Notification settings button
-                          ConstrainedBox(
-                            constraints: const BoxConstraints(maxWidth: 400),
-                            child: ElevatedButton.icon(
-                              icon: const Icon(Icons.notifications_outlined),
-                              label: const Text(
-                                'Exercise Reminder Settings',
-                                textAlign: TextAlign.center,
-                              ),
-                              style: ElevatedButton.styleFrom(
-                                padding: const EdgeInsets.symmetric(
-                                  vertical: 12,
-                                  horizontal: 16,
-                                ),
-                              ),
-                              onPressed: () {
-                                _showNotificationSettingsDialog(context);
-                              },
-                            ),
-                          ),
-                          const SizedBox(height: 16),
-                          // Communication buttons with independent message input
-                          ConstrainedBox(
-                            constraints: const BoxConstraints(maxWidth: 400),
-                            child: MessageButtonRow(
-                              user: user,
-                              getUnreadMessageInfo: _getUnreadMessageInfo,
-                              markProviderMessagesAsRead:
-                                  _markProviderMessagesAsRead,
-                              formatMessageTime: _formatMessageTime,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ),
-                ),
-              ],
-            );
-          }
-
-          // Show plans and then exercises, plus name display/edit with exercise status
-          return Column(
-            children: [
-              Padding(
-                padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
-                child: Row(
-                  children: [
-                    Expanded(
-                      child: FutureBuilder<String>(
-                        future: _getExerciseStatusMessage(user.uid),
-                        builder: (context, snapshot) {
-                          final greeting =
-                              name.isNotEmpty
-                                  ? 'Hi $name!'
-                                  : 'Hi Anonymous User! What\'s your name?';
-                          final statusMessage =
-                              snapshot.hasData && snapshot.data!.isNotEmpty
-                                  ? ' ${snapshot.data!}'
-                                  : '';
-                          return Text(
-                            '$greeting$statusMessage',
-                            style: const TextStyle(
-                              fontSize: 18,
-                              fontWeight: FontWeight.bold,
-                            ),
-                            textAlign: TextAlign.center,
-                          );
-                        },
-                      ),
-                    ),
-                    // Only show edit button if no name is set
-                    if (name.isEmpty)
-                      IconButton(
-                        icon: const Icon(Icons.edit),
-                        tooltip: 'Set Name',
-                        onPressed: () {
-                          showDialog(
-                            context: context,
-                            builder: (ctx) {
-                              return AlertDialog(
-                                title: const Text('Set Your Name'),
-                                content: TextField(
-                                  controller: nameController,
-                                  decoration: const InputDecoration(
-                                    labelText: 'Enter your name',
-                                  ),
-                                  autofocus: true,
-                                ),
-                                actions: [
-                                  TextButton(
-                                    child: const Text('Cancel'),
-                                    onPressed: () => Navigator.of(ctx).pop(),
-                                  ),
-                                  ElevatedButton(
-                                    child: const Text('Save'),
-                                    onPressed: () async {
-                                      final newName =
-                                          nameController.text.trim();
-                                      if (newName.isNotEmpty) {
-                                        await FirebaseFirestore.instance
-                                            .collection('users')
-                                            .doc(user.uid)
-                                            .set({
-                                              'name': newName,
-                                            }, SetOptions(merge: true));
-                                        Navigator.of(ctx).pop();
-                                        ScaffoldMessenger.of(
-                                          context,
-                                        ).showSnackBar(
-                                          SnackBar(
-                                            content: Text(
-                                              'Name set! To change it later, please message your provider.',
-                                            ),
-                                          ),
-                                        );
-                                      }
-                                    },
-                                  ),
-                                ],
-                              );
-                            },
-                          );
-                        },
-                      ),
-                  ],
-                ),
-              ),
-              Expanded(
-                child: ListView(
-                  children: [
-                    // Plans first
-                    ...planIds.map((planId) => PlanTile(planId: planId)),
-                    // Divider if both present
-                    if (planIds.isNotEmpty && exerciseIds.isNotEmpty)
-                      const Padding(
-                        padding: EdgeInsets.symmetric(vertical: 8.0),
-                        child: Divider(thickness: 1),
-                      ),
-                    // Directly assigned exercises
-                    if (exerciseIds.isNotEmpty)
-                      Padding(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 16.0,
-                          vertical: 4.0,
-                        ),
-                        child: Text(
-                          'Additional Exercises:',
-                          style: TextStyle(
-                            fontSize: 16,
-                            fontWeight: FontWeight.bold,
-                            color: Colors.deepPurple,
-                          ),
-                        ),
-                      ),
-                    ...exerciseIds.map((eid) => ExerciseTile(exerciseId: eid)),
-                  ],
-                ),
-              ),
-              SafeArea(
-                child: Padding(
-                  padding: const EdgeInsets.all(16.0),
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      // Pain tracking buttons
-                      ConstrainedBox(
-                        constraints: const BoxConstraints(maxWidth: 400),
-                        child: Row(
-                          children: [
-                            Expanded(
-                              child: ElevatedButton.icon(
-                                icon: const Icon(Icons.add_circle_outline),
-                                label: const Text(
-                                  'Add Pain Level',
-                                  textAlign: TextAlign.center,
-                                ),
-                                style: ElevatedButton.styleFrom(
-                                  padding: const EdgeInsets.symmetric(
-                                    vertical: 12,
-                                    horizontal: 8,
-                                  ),
-                                ),
-                                onPressed: () async {
-                                  await _showAddPainLevelDialog(
-                                    context,
-                                    user.uid,
-                                  );
-                                },
-                              ),
-                            ),
-                            const SizedBox(width: 8),
-                            Expanded(
-                              child: ElevatedButton.icon(
-                                icon: const Icon(Icons.history),
-                                label: const Text(
-                                  'View Pain History',
-                                  textAlign: TextAlign.center,
-                                ),
-                                style: ElevatedButton.styleFrom(
-                                  padding: const EdgeInsets.symmetric(
-                                    vertical: 12,
-                                    horizontal: 8,
-                                  ),
-                                ),
-                                onPressed: () {
-                                  _showPainHistoryDialog(context, user.uid);
-                                },
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                      const SizedBox(height: 8),
-                      // Communication buttons with independent message input
-                      ConstrainedBox(
-                        constraints: const BoxConstraints(maxWidth: 400),
-                        child: MessageButtonRow(
-                          user: user,
-                          getUnreadMessageInfo: _getUnreadMessageInfo,
-                          markProviderMessagesAsRead:
-                              _markProviderMessagesAsRead,
-                          formatMessageTime: _formatMessageTime,
-                        ),
-                      ),
-                      const SizedBox(height: 8),
-                      // Notification settings button
-                      ConstrainedBox(
-                        constraints: const BoxConstraints(maxWidth: 400),
-                        child: ElevatedButton.icon(
-                          icon: const Icon(Icons.notifications_outlined),
-                          label: const Text(
-                            'Exercise Reminder Settings',
-                            textAlign: TextAlign.center,
-                          ),
-                          style: ElevatedButton.styleFrom(
-                            padding: const EdgeInsets.symmetric(
-                              vertical: 12,
-                              horizontal: 16,
-                            ),
-                          ),
-                          onPressed: () {
-                            _showNotificationSettingsDialog(context);
-                          },
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-            ],
-          );
-        },
-      ),
-    );
-  }
-}
-
-class PlanTile extends StatelessWidget {
-  final String planId;
-  const PlanTile({super.key, required this.planId});
   @override
   Widget build(BuildContext context) {
     return StreamBuilder<DocumentSnapshot>(
       stream:
           FirebaseFirestore.instance
               .collection('plans')
-              .doc(planId)
+              .doc(widget.planId)
               .snapshots(),
       builder: (context, snapshot) {
         if (!snapshot.hasData) return ListTile(title: const Text('Loading...'));
@@ -4092,7 +3026,20 @@ class PlanTile extends StatelessWidget {
                   .toList();
         }
 
+        // Determine initial expansion state if not yet set
+        if (_isExpanded == null) {
+          _shouldBeExpandedByDefault(exerciseData).then((shouldExpand) {
+            if (mounted) {
+              setState(() {
+                _isExpanded = shouldExpand;
+              });
+            }
+          });
+        }
+
         return ExpansionTile(
+          key: ValueKey('plan_${widget.planId}_${_isExpanded ?? false}'),
+          initiallyExpanded: _isExpanded ?? false,
           title: Text(plan['name'] ?? 'Unnamed Plan'),
           subtitle:
               exerciseData.isEmpty
@@ -4110,6 +3057,7 @@ class PlanTile extends StatelessWidget {
                     (data) => ExerciseTile(
                       exerciseId: data['exerciseId'] as String,
                       phase: data['phase'] as String?,
+                      onExerciseCompleted: widget.onExerciseCompleted,
                     ),
                   )
                   .toList(),
@@ -4122,16 +3070,23 @@ class PlanTile extends StatelessWidget {
 class ExerciseTile extends StatelessWidget {
   final String exerciseId;
   final String? phase;
-  const ExerciseTile({super.key, required this.exerciseId, this.phase});
+  final VoidCallback? onExerciseCompleted;
+  
+  const ExerciseTile({
+    super.key,
+    required this.exerciseId,
+    this.phase,
+    this.onExerciseCompleted,
+  });
 
   // Static method to clear congratulatory text
   static void clearCongratulatoryText() {
-    _HomeScreenState._currentCongratulatoryExercise = null;
+    ExerciseCongratulatoryState.currentCongratulatoryExercise = null;
   }
 
   // Static method to set congratulatory text for a specific exercise
   static void setCongratulatoryExercise(String exerciseId) {
-    _HomeScreenState._currentCongratulatoryExercise = exerciseId;
+    ExerciseCongratulatoryState.currentCongratulatoryExercise = exerciseId;
   }
 
   @override
@@ -4153,19 +3108,120 @@ class ExerciseTile extends StatelessWidget {
         final createdAt = exercise['createdAt'];
         final updatedAt = exercise['updatedAt'];
 
-        // Build subtitle with available info
-        List<String> subtitleParts = [];
-        if (recommendedReps != null && recommendedReps.toString().isNotEmpty) {
-          subtitleParts.add('Reps: $recommendedReps');
-        }
-        if (description != null && description.toString().isNotEmpty) {
-          // Show first 50 characters of description
-          String shortDesc = description.toString();
-          if (shortDesc.length > 50) {
-            shortDesc = '${shortDesc.substring(0, 50)}...';
-          }
-          subtitleParts.add(shortDesc);
-        }
+        // StreamBuilder for check-ins to get last check-in info
+        return StreamBuilder<QuerySnapshot>(
+          stream:
+              FirebaseFirestore.instance
+                  .collection('exercise_check_ins')
+                  .where(
+                    'userId',
+                    isEqualTo: FirebaseAuth.instance.currentUser?.uid,
+                  )
+                  .where('exerciseId', isEqualTo: exerciseId)
+                  .snapshots(),
+          builder: (context, checkInSnapshot) {
+            DateTime? lastCheckIn;
+            bool doneToday = false;
+
+            if (checkInSnapshot.hasData && checkInSnapshot.data!.docs.isNotEmpty) {
+              // Sort by timestamp descending to get the latest
+              final docs = checkInSnapshot.data!.docs;
+              docs.sort((a, b) {
+                final aData = a.data() as Map<String, dynamic>;
+                final bData = b.data() as Map<String, dynamic>;
+                final aTs = aData['timestamp'];
+                final bTs = bData['timestamp'];
+
+                DateTime? aDt, bDt;
+                if (aTs is Timestamp) aDt = aTs.toDate();
+                if (bTs is Timestamp) bDt = bTs.toDate();
+
+                if (aDt == null && bDt == null) return 0;
+                if (aDt == null) return 1;
+                if (bDt == null) return -1;
+                return bDt.compareTo(aDt);
+              });
+
+              final latestDoc = docs.first;
+              final latestData = latestDoc.data() as Map<String, dynamic>;
+              final timestamp = latestData['timestamp'];
+
+              if (timestamp is Timestamp) {
+                lastCheckIn = timestamp.toDate();
+              }
+
+              // Check if done today
+              if (lastCheckIn != null) {
+                final now = DateTime.now();
+                doneToday =
+                    lastCheckIn.year == now.year &&
+                    lastCheckIn.month == now.month &&
+                    lastCheckIn.day == now.day;
+              }
+            }
+
+            // Build subtitle with timestamp and other info
+            List<Widget> subtitleWidgets = [];
+            
+            // Add last check-in info as first line
+            if (lastCheckIn != null) {
+              final now = DateTime.now();
+              final diff = now.difference(lastCheckIn);
+              
+              String lastDidText;
+              if (doneToday) {
+                if (diff.inMinutes == 0) {
+                  lastDidText = 'Last did it just now';
+                } else if (diff.inHours == 0) {
+                  lastDidText = 'Last did it ${diff.inMinutes} minute${diff.inMinutes == 1 ? '' : 's'} ago';
+                } else {
+                  lastDidText = 'Last did it ${diff.inHours} hour${diff.inHours == 1 ? '' : 's'} ago';
+                }
+              } else {
+                final days = diff.inDays;
+                if (days == 0) {
+                  lastDidText = 'Last did it earlier today';
+                } else if (days == 1) {
+                  lastDidText = 'Last did it yesterday';
+                } else {
+                  lastDidText = 'Last did it $days days ago';
+                }
+                lastDidText += ', ${lastCheckIn.month}/${lastCheckIn.day} at ${lastCheckIn.hour % 12 == 0 ? 12 : lastCheckIn.hour % 12}:${lastCheckIn.minute.toString().padLeft(2, '0')} ${lastCheckIn.hour >= 12 ? 'pm' : 'am'}';
+              }
+              
+              subtitleWidgets.add(
+                Text(
+                  lastDidText,
+                  style: TextStyle(
+                    fontSize: 11,
+                    color: doneToday ? Colors.green : Colors.grey[600],
+                    fontWeight: FontWeight.w500,
+                  ),
+                ),
+              );
+            }
+
+            // Add other info (reps, description)
+            List<String> additionalParts = [];
+            if (recommendedReps != null && recommendedReps.toString().isNotEmpty) {
+              additionalParts.add('Reps: $recommendedReps');
+            }
+            if (description != null && description.toString().isNotEmpty) {
+              String shortDesc = description.toString();
+              if (shortDesc.length > 50) {
+                shortDesc = '${shortDesc.substring(0, 50)}...';
+              }
+              additionalParts.add(shortDesc);
+            }
+            
+            if (additionalParts.isNotEmpty) {
+              subtitleWidgets.add(
+                Text(
+                  additionalParts.join(' • '),
+                  style: const TextStyle(fontSize: 12),
+                ),
+              );
+            }
 
         return ExpansionTile(
           title:
@@ -4194,222 +3250,83 @@ class ExerciseTile extends StatelessWidget {
                   )
                   : Text(title),
           subtitle:
-              subtitleParts.isNotEmpty
-                  ? Text(
-                    subtitleParts.join(' • '),
-                    style: const TextStyle(fontSize: 12),
-                  )
+              subtitleWidgets.isNotEmpty
+                  ? Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: subtitleWidgets,
+                    )
                   : null,
           tilePadding: const EdgeInsets.symmetric(
             horizontal: 16,
             vertical: 4,
-          ), // Reduced vertical padding to minimize gaps
+          ),
           trailing: SizedBox(
-            width: 120, // Fixed width to contain our vertical layout
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                // Last check-in display and Did it button in vertical layout
-                Expanded(
-                  child: StreamBuilder<QuerySnapshot>(
-                    stream:
-                        FirebaseFirestore.instance
-                            .collection('exercise_check_ins')
-                            .where(
-                              'userId',
-                              isEqualTo: FirebaseAuth.instance.currentUser?.uid,
-                            )
-                            .where('exerciseId', isEqualTo: exerciseId)
-                            .snapshots(),
-                    builder: (context, snapshot) {
-                      DateTime? lastCheckIn;
-                      bool doneToday = false;
+            width: 90,
+            child: ElevatedButton(
+              onPressed: () async {
+                final user = FirebaseAuth.instance.currentUser;
+                if (user != null) {
+                  // Clear any existing congratulatory text
+                  ExerciseTile.clearCongratulatoryText();
 
-                      if (snapshot.hasData && snapshot.data!.docs.isNotEmpty) {
-                        // Sort by timestamp descending to get the latest
-                        final docs = snapshot.data!.docs;
-                        docs.sort((a, b) {
-                          final aData = a.data() as Map<String, dynamic>;
-                          final bData = b.data() as Map<String, dynamic>;
-                          final aTs = aData['timestamp'];
-                          final bTs = bData['timestamp'];
+                  await FirebaseFirestore.instance
+                      .collection('exercise_check_ins')
+                      .add({
+                        'userId': user.uid,
+                        'exerciseId': exerciseId,
+                        'timestamp': FieldValue.serverTimestamp(),
+                      });
 
-                          DateTime? aDt, bDt;
-                          if (aTs is Timestamp) aDt = aTs.toDate();
-                          if (bTs is Timestamp) bDt = bTs.toDate();
+                  // Set congratulatory text for this exercise
+                  ExerciseTile.setCongratulatoryExercise(
+                    exerciseId,
+                  );
 
-                          if (aDt == null && bDt == null) return 0;
-                          if (aDt == null) return 1;
-                          if (bDt == null) return -1;
-                          return bDt.compareTo(aDt);
-                        });
-
-                        final latestDoc = docs.first;
-                        final latestData =
-                            latestDoc.data() as Map<String, dynamic>;
-                        final timestamp = latestData['timestamp'];
-
-                        if (timestamp is Timestamp) {
-                          lastCheckIn = timestamp.toDate();
-                        }
-
-                        // Check if done today
-                        if (lastCheckIn != null) {
-                          final now = DateTime.now();
-                          doneToday =
-                              lastCheckIn.year == now.year &&
-                              lastCheckIn.month == now.month &&
-                              lastCheckIn.day == now.day;
-                        }
-                      }
-
-                      return Column(
-                        mainAxisSize: MainAxisSize.min,
-                        crossAxisAlignment: CrossAxisAlignment.end,
-                        children: [
-                          // Did it button at the top
-                          ElevatedButton(
-                            onPressed: () async {
-                              final user = FirebaseAuth.instance.currentUser;
-                              if (user != null) {
-                                // Clear any existing congratulatory text
-                                ExerciseTile.clearCongratulatoryText();
-
-                                await FirebaseFirestore.instance
-                                    .collection('exercise_check_ins')
-                                    .add({
-                                      'userId': user.uid,
-                                      'exerciseId': exerciseId,
-                                      'timestamp': FieldValue.serverTimestamp(),
-                                    });
-
-                                // Set congratulatory text for this exercise
-                                ExerciseTile.setCongratulatoryExercise(
-                                  exerciseId,
-                                );
-
-                                // Notify the reminder system that an exercise was completed
-                                await ExerciseReminderManager.onExerciseCompleted();
-                              }
-                            },
-                            style: ElevatedButton.styleFrom(
-                              backgroundColor:
-                                  doneToday ? Colors.grey : Colors.green,
-                              foregroundColor: Colors.white,
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 6,
-                                vertical: 2,
-                              ),
-                              minimumSize: const Size(70, 18), // Compact button
-                            ),
-                            child: Text(
-                              doneToday
-                                  ? (_HomeScreenState
-                                              ._currentCongratulatoryExercise ==
-                                          exerciseId
-                                      ? () {
-                                        final congratsMessages = [
-                                          'Good job!',
-                                          'Nice!',
-                                          'Awesome!',
-                                          'Well done!',
-                                          'Great work!',
-                                          'Excellent!',
-                                          'Fantastic!',
-                                          'Keep it up!',
-                                          'Amazing!',
-                                          'Outstanding!',
-                                        ];
-                                        return congratsMessages[DateTime.now()
-                                                .millisecondsSinceEpoch %
-                                            congratsMessages.length];
-                                      }()
-                                      : 'Did it again!')
-                                  : 'Did it!',
-                              style: const TextStyle(
-                                fontSize: 9,
-                              ), // Smaller font to fit in compact button
-                            ),
-                          ),
-                          const SizedBox(
-                            height: 4,
-                          ), // Small spacing between button and text
-                          // Last check-in display below button
-                          if (lastCheckIn != null)
-                            Container(
-                              constraints: const BoxConstraints(
-                                minHeight: 20,
-                              ), // Ensure minimum height for text
-                              width: double.infinity,
-                              child: Builder(
-                                builder: (context) {
-                                  final checkIn = lastCheckIn;
-                                  if (checkIn == null) return const SizedBox();
-
-                                  if (doneToday) {
-                                    final now = DateTime.now();
-                                    final diff = now.difference(checkIn);
-                                    // Convert to 12-hour format
-                                    final hour12 =
-                                        checkIn.hour == 0
-                                            ? 12
-                                            : (checkIn.hour > 12
-                                                ? checkIn.hour - 12
-                                                : checkIn.hour);
-                                    final amPm =
-                                        checkIn.hour >= 12 ? 'PM' : 'AM';
-                                    final timeStr =
-                                        '${hour12}:${checkIn.minute.toString().padLeft(2, '0')} $amPm';
-
-                                    String agoText;
-                                    if (diff.inMinutes == 0) {
-                                      agoText = 'just now';
-                                    } else if (diff.inMinutes < 60) {
-                                      agoText = '${diff.inMinutes}m ago';
-                                    } else {
-                                      final hours = diff.inHours;
-                                      final minutes = diff.inMinutes % 60;
-                                      if (minutes == 0) {
-                                        agoText = '${hours}h ago';
-                                      } else {
-                                        agoText = '${hours}h ${minutes}m ago';
-                                      }
-                                    }
-
-                                    return Text(
-                                      'Today $timeStr ($agoText)',
-                                      style: const TextStyle(
-                                        fontSize: 10,
-                                        color: Colors.grey,
-                                        fontWeight: FontWeight.bold,
-                                      ),
-                                      textAlign: TextAlign.right,
-                                      maxLines: 2, // Allow 2 lines if needed
-                                      overflow: TextOverflow.ellipsis,
-                                    );
-                                  } else {
-                                    return Text(
-                                      'Last Done: ${checkIn.month}/${checkIn.day} ${checkIn.hour.toString().padLeft(2, '0')}:${checkIn.minute.toString().padLeft(2, '0')}',
-                                      style: const TextStyle(
-                                        fontSize: 10,
-                                        color: Colors.green,
-                                      ),
-                                      textAlign: TextAlign.right,
-                                      maxLines: 2, // Allow 2 lines if needed
-                                      overflow: TextOverflow.ellipsis,
-                                    );
-                                  }
-                                },
-                              ),
-                            ),
-                        ],
-                      );
-                    },
+                  // Notify the reminder system that an exercise was completed
+                  await ExerciseReminderManager.onExerciseCompleted();
+                  
+                  // Notify parent widget to update exercise status message
+                  onExerciseCompleted?.call();
+                }
+              },
+              style: ElevatedButton.styleFrom(
+                backgroundColor:
+                    doneToday ? Colors.grey : Colors.green,
+                foregroundColor: Colors.white,
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 12,
+                  vertical: 8,
+                ),
+                minimumSize: const Size(80, 32),
+              ),
+              child: FittedBox(
+                fit: BoxFit.scaleDown,
+                child: Text(
+                  doneToday
+                      ? (ExerciseCongratulatoryState
+                                  .currentCongratulatoryExercise ==
+                              exerciseId
+                          ? () {
+                            final congratsMessages = [
+                              'Good job!',
+                              'Nice!',
+                              'Awesome!',
+                              'Well done!',
+                              'Great!',
+                              'Excellent!',
+                            ];
+                            return congratsMessages[DateTime.now()
+                                    .millisecondsSinceEpoch %
+                                congratsMessages.length];
+                          }()
+                          : 'Done!')
+                      : 'Did it!',
+                  style: const TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.bold,
                   ),
                 ),
-                const SizedBox(width: 8),
-                const Icon(Icons.expand_more),
-              ],
+              ),
             ),
           ),
           children: [
@@ -4437,6 +3354,7 @@ class ExerciseTile extends StatelessWidget {
                   if (recommendedReps != null &&
                       recommendedReps.toString().isNotEmpty) ...[
                     Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         const Text(
                           'Recommended Repetitions: ',
@@ -4445,9 +3363,12 @@ class ExerciseTile extends StatelessWidget {
                             fontSize: 13,
                           ),
                         ),
-                        Text(
-                          recommendedReps.toString(),
-                          style: const TextStyle(fontSize: 13),
+                        Expanded(
+                          child: Text(
+                            recommendedReps.toString(),
+                            style: const TextStyle(fontSize: 13),
+                            softWrap: true,
+                          ),
                         ),
                       ],
                     ),
@@ -4550,7 +3471,28 @@ class ExerciseTile extends StatelessWidget {
                     }).toList(),
                     const SizedBox(height: 12),
                   ],
-                  if (createdAt != null && createdAt.toString().isNotEmpty) ...[
+                  // Show Updated if it exists, otherwise show Created
+                  if (updatedAt != null && updatedAt.toString().isNotEmpty) ...[
+                    Row(
+                      children: [
+                        const Text(
+                          'Last Updated: ',
+                          style: TextStyle(
+                            fontWeight: FontWeight.bold,
+                            fontSize: 12,
+                            color: Colors.grey,
+                          ),
+                        ),
+                        Text(
+                          _formatDate(updatedAt.toString()),
+                          style: const TextStyle(
+                            fontSize: 12,
+                            color: Colors.grey,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ] else if (createdAt != null && createdAt.toString().isNotEmpty) ...[
                     Row(
                       children: [
                         const Text(
@@ -4570,33 +3512,13 @@ class ExerciseTile extends StatelessWidget {
                         ),
                       ],
                     ),
-                    const SizedBox(height: 4),
-                  ],
-                  if (updatedAt != null && updatedAt.toString().isNotEmpty) ...[
-                    Row(
-                      children: [
-                        const Text(
-                          'Updated: ',
-                          style: TextStyle(
-                            fontWeight: FontWeight.bold,
-                            fontSize: 12,
-                            color: Colors.grey,
-                          ),
-                        ),
-                        Text(
-                          _formatDate(updatedAt.toString()),
-                          style: const TextStyle(
-                            fontSize: 12,
-                            color: Colors.grey,
-                          ),
-                        ),
-                      ],
-                    ),
                   ],
                 ],
               ),
             ),
           ],
+        );
+          },
         );
       },
     );
@@ -4721,7 +3643,8 @@ class ExerciseTile extends StatelessWidget {
   String _formatDate(String dateString) {
     try {
       final date = DateTime.parse(dateString);
-      return '${date.year}-${date.month.toString().padLeft(2, '0')}-${date.day.toString().padLeft(2, '0')}';
+      // American date format: MM/DD/YYYY
+      return '${date.month}/${date.day}/${date.year}';
     } catch (e) {
       return dateString;
     }
@@ -4914,11 +3837,13 @@ class MessageButton extends StatelessWidget {
             backgroundColor: unreadCount > 0 ? Colors.orange : null,
             foregroundColor: unreadCount > 0 ? Colors.white : null,
           ),
-          onPressed: () async {
-            if (unreadCount > 0) {
-              await markProviderMessagesAsRead(user.uid);
-            }
-            onPressed();
+          onPressed: () {
+            // Navigate to full-screen messages page
+            Navigator.of(context).push(
+              MaterialPageRoute(
+                builder: (context) => MessagesScreen(user: user),
+              ),
+            );
           },
         );
       },
@@ -4998,12 +3923,15 @@ class _FullWidthMessageInputState extends State<FullWidthMessageInput> {
 
   @override
   Widget build(BuildContext context) {
+    final keyboardHeight = MediaQuery.of(context).viewInsets.bottom;
+    final availableHeight = MediaQuery.of(context).size.height - keyboardHeight;
+    
     return Container(
       width: MediaQuery.of(context).size.width - 32,
       margin: const EdgeInsets.symmetric(horizontal: 0.0),
       padding: const EdgeInsets.all(16.0),
       constraints: BoxConstraints(
-        maxHeight: MediaQuery.of(context).size.height * 0.8,
+        maxHeight: availableHeight * 0.7,
       ),
       decoration: BoxDecoration(
         color: Colors.white,
@@ -5021,6 +3949,7 @@ class _FullWidthMessageInputState extends State<FullWidthMessageInput> {
       child: SingleChildScrollView(
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
           children: [
           TextField(
             controller: _controller,
@@ -5154,11 +4083,7 @@ class _FullWidthMessageInputState extends State<FullWidthMessageInput> {
           ),
           const SizedBox(height: 12),
           Container(
-            height: MediaQuery.of(context).size.height * 0.4,
-            constraints: const BoxConstraints(
-              minHeight: 200,
-              maxHeight: 400,
-            ),
+            height: 150,
             decoration: BoxDecoration(
               border: Border.all(color: Colors.grey.shade200),
               borderRadius: BorderRadius.circular(8),
@@ -5579,9 +4504,15 @@ class _MessageInputWidgetState extends State<MessageInputWidget> {
       );
     }
     if (showInput) {
+      final keyboardHeight = MediaQuery.of(context).viewInsets.bottom;
+      final availableHeight = MediaQuery.of(context).size.height - keyboardHeight;
+      
       children.add(
         Container(
           width: MediaQuery.of(context).size.width - 32,
+          constraints: BoxConstraints(
+            maxHeight: availableHeight * 0.65,
+          ),
           margin: const EdgeInsets.symmetric(horizontal: 0.0, vertical: 8.0),
           padding: const EdgeInsets.all(16.0),
           decoration: BoxDecoration(
@@ -5597,9 +4528,11 @@ class _MessageInputWidgetState extends State<MessageInputWidget> {
               ),
             ],
           ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
+          child: SingleChildScrollView(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
               TextField(
                 controller: _controller,
                 decoration: InputDecoration(
@@ -5732,11 +4665,7 @@ class _MessageInputWidgetState extends State<MessageInputWidget> {
               ),
               const SizedBox(height: 12),
               Container(
-                height: MediaQuery.of(context).size.height * 0.4,
-                constraints: const BoxConstraints(
-                  minHeight: 200,
-                  maxHeight: 400,
-                ),
+                height: 150,
                 decoration: BoxDecoration(
                   border: Border.all(color: Colors.grey.shade200),
                   borderRadius: BorderRadius.circular(8),
@@ -5867,11 +4796,15 @@ class _MessageInputWidgetState extends State<MessageInputWidget> {
                 ),
               ),
             ],
+            ),
           ),
         ),
       );
     }
-    return Column(children: children);
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: children,
+    );
   }
 
   Widget _buildMessageBubble(QueryDocumentSnapshot doc) {

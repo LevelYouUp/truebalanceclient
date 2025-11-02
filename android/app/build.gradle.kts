@@ -44,6 +44,19 @@ android {
     }
 }
 
+// Customize APK output file names - must be OUTSIDE android block
+android.applicationVariants.all {
+    outputs.all {
+        val output = this as com.android.build.gradle.internal.api.BaseVariantOutputImpl
+        val versionName = android.defaultConfig.versionName
+        val versionCode = android.defaultConfig.versionCode
+        val buildType = this.name
+        
+        // Format: TrueBalance-v1.0.0-1-debug.apk or TrueBalance-v1.0.0-1-release.apk
+        output.outputFileName = "TrueBalance-v${versionName}-${versionCode}-${buildType}.apk"
+    }
+}
+
 flutter {
     source = "../.."
 }
