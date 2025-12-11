@@ -2,22 +2,89 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:flutter/foundation.dart';
 import 'notification_service.dart';
 import 'dart:async';
+import 'package:workmanager/workmanager.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+import 'package:firebase_core/firebase_core.dart';
+import 'firebase_options.dart';
+
+// Background callback for WorkManager - MUST be a top-level function
+// This runs when the device boots or on scheduled intervals
+@pragma('vm:entry-point')
+void callbackDispatcher() {
+  Workmanager().executeTask((task, inputData) async {
+    try {
+      print('[WorkManager] Background task started: $task');
+      
+      // Initialize Firebase if needed
+      try {
+        await Firebase.initializeApp(
+          options: DefaultFirebaseOptions.currentPlatform,
+        );
+      } catch (e) {
+        // Firebase already initialized
+        print('[WorkManager] Firebase already initialized or not available: $e');
+      }
+      
+      // Initialize notification service
+      await NotificationService.initialize();
+      
+      // Get current user from Firebase Auth persistence
+      final user = FirebaseAuth.instance.currentUser;
+      if (user != null) {
+        print('[WorkManager] User authenticated: ${user.uid}');
+        
+        // Reschedule the next notification to ensure it's still scheduled
+        // This handles cases where the user restarted their device
+        await NotificationService.rescheduleNotification(user.uid);
+        
+        print('[WorkManager] Notification rescheduled successfully');
+        return Future.value(true);
+      } else {
+        print('[WorkManager] No authenticated user found');
+        return Future.value(true); // Not an error, user just not logged in
+      }
+    } catch (e) {
+      print('[WorkManager] Error in background task: $e');
+      return Future.value(false);
+    }
+  });
+}
 
 class ExerciseReminderManager {
-  static Timer? _reminderTimer;
   static const String _enabledKey = 'exercise_reminders_enabled';
-  static const String _lastCheckKey = 'last_reminder_check';
   static const String _intervalHoursKey = 'notification_interval_hours';
+  static const String _bootCompleteTaskName = 'exerciseReminderBootComplete';
 
   // Initialize the reminder system
   static Future<void> initialize() async {
     if (kIsWeb) {
-      print('Exercise reminders not fully supported on web platform');
+      print('[ExerciseReminderManager] Reminders not fully supported on web platform');
       return;
     }
 
+    print('[ExerciseReminderManager] Initializing...');
+    
     await NotificationService.initialize();
-    await _startPeriodicCheck();
+    
+    // Initialize WorkManager for background tasks (boot completion, etc.)
+    await Workmanager().initialize(
+      callbackDispatcher,
+      isInDebugMode: false,
+    );
+    
+    // Register boot completion task that reschedules notifications after device reboot
+    await _registerBootCompleteTask();
+    
+    // Do an immediate reschedule for the current session
+    final user = FirebaseAuth.instance.currentUser;
+    if (user != null) {
+      print('[ExerciseReminderManager] Current user found, scheduling notification');
+      await NotificationService.rescheduleNotification(user.uid);
+    } else {
+      print('[ExerciseReminderManager] No current user, waiting for auth');
+    }
+    
+    print('[ExerciseReminderManager] Initialization complete');
   }
 
   // Check if reminders are enabled
@@ -31,10 +98,16 @@ class ExerciseReminderManager {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool(_enabledKey, enabled);
 
+    print('[ExerciseReminderManager] Reminders enabled: $enabled');
+
     if (enabled) {
-      await _startPeriodicCheck();
+      final user = FirebaseAuth.instance.currentUser;
+      if (user != null) {
+        await NotificationService.rescheduleNotification(user.uid);
+      }
     } else {
-      await _stopPeriodicCheck();
+      await NotificationService.cancelAllNotifications();
+      print('[ExerciseReminderManager] All notifications cancelled');
     }
   }
 
@@ -48,80 +121,56 @@ class ExerciseReminderManager {
   static Future<void> setNotificationIntervalHours(int hours) async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setInt(_intervalHoursKey, hours);
+    
+    print('[ExerciseReminderManager] Notification interval set to $hours hours');
+    
+    // Reschedule notifications with the new interval
+    final user = FirebaseAuth.instance.currentUser;
+    if (user != null) {
+      await NotificationService.rescheduleNotification(user.uid);
+    }
   }
 
-  // Start periodic checking (every 30 minutes when app is active)
-  static Future<void> _startPeriodicCheck() async {
-    _stopPeriodicCheck(); // Cancel any existing timer
+  // Register boot completion task (runs once after device reboot)
+  static Future<void> _registerBootCompleteTask() async {
+    if (kIsWeb) return;
 
-    final enabled = await areRemindersEnabled();
-    if (!enabled) return;
-
-    // Check immediately
-    await _performReminderCheck();
-
-    // Then check every 30 minutes
-    _reminderTimer = Timer.periodic(
-      const Duration(minutes: 30),
-      (_) => _performReminderCheck(),
-    );
-  }
-
-  // Stop periodic checking
-  static Future<void> _stopPeriodicCheck() async {
-    _reminderTimer?.cancel();
-    _reminderTimer = null;
-  }
-
-  // Perform the actual reminder check
-  static Future<void> _performReminderCheck() async {
     try {
-      final enabled = await areRemindersEnabled();
-      if (!enabled) return;
-
-      // Avoid checking too frequently
-      final prefs = await SharedPreferences.getInstance();
-      final lastCheck = prefs.getString(_lastCheckKey);
-      if (lastCheck != null) {
-        final lastCheckTime = DateTime.parse(lastCheck);
-        final timeSinceLastCheck = DateTime.now().difference(lastCheckTime);
-        if (timeSinceLastCheck.inMinutes < 30) {
-          return; // Checked too recently
-        }
-      }
-
-      // Record this check
-      await prefs.setString(_lastCheckKey, DateTime.now().toIso8601String());
-
-      // Check if notification should be sent
-      await NotificationService.checkAndSendNotification();
+      // This task runs once when device boots (handles by Android system)
+      await Workmanager().registerOneOffTask(
+        _bootCompleteTaskName,
+        _bootCompleteTaskName,
+        constraints: Constraints(
+          networkType: NetworkType.connected,
+        ),
+        initialDelay: Duration.zero,
+      );
+      
+      print('[ExerciseReminderManager] Boot complete task registered');
     } catch (e) {
-      print('Error in reminder check: $e');
+      print('[ExerciseReminderManager] Error registering boot task: $e');
     }
   }
 
   // Call this when user completes an exercise (from your existing "Did it!" logic)
   static Future<void> onExerciseCompleted() async {
-    // This resets the 25-hour timer since the user just completed an exercise
-    // The next check will see this recent completion and won't send a notification
-    print('Exercise completed - reminder timer reset');
+    // This resets the notification timer since the user just completed an exercise
+    // The next notification will be scheduled based on the configured interval
+    print('[ExerciseReminderManager] Exercise completed - rescheduling notifications');
 
-    // Optional: You could also clear any scheduled notifications here
-    // await NotificationService.cancelAllNotifications();
+    final user = FirebaseAuth.instance.currentUser;
+    if (user != null) {
+      await NotificationService.rescheduleNotification(user.uid);
+    }
   }
 
   // Manual trigger for testing
   static Future<void> triggerTestNotification() async {
     if (kIsWeb) {
-      print('Test notification skipped on web platform');
+      print('[ExerciseReminderManager] Test notification skipped on web platform');
       return;
     }
+    print('[ExerciseReminderManager] Triggering test notification');
     await NotificationService.showExerciseReminder();
-  }
-
-  // Dispose resources
-  static void dispose() {
-    _reminderTimer?.cancel();
-    _reminderTimer = null;
   }
 }

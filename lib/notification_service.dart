@@ -4,6 +4,8 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/foundation.dart';
 import 'dart:async';
+import 'package:timezone/timezone.dart' as tz;
+import 'package:timezone/data/latest.dart' as tz;
 
 // Import here to avoid circular dependency
 // import 'exercise_reminder_manager.dart';
@@ -20,6 +22,13 @@ class NotificationService {
     if (kIsWeb) {
       print('Notifications not supported on web platform');
       return;
+    }
+
+    // Initialize timezone database for scheduled notifications
+    try {
+      tz.initializeTimeZones();
+    } catch (e) {
+      print('Error initializing timezone data: $e');
     }
 
     // Android initialization settings
@@ -298,6 +307,118 @@ class NotificationService {
     final shouldSend = await shouldSendNotification(user.uid);
     if (shouldSend) {
       await showExerciseReminder();
+    }
+  }
+
+  // Schedule a notification for a specific time in the future
+  static Future<void> scheduleNotification(DateTime scheduledTime) async {
+    if (kIsWeb) {
+      print('[NotificationService] Scheduled notifications not supported on web');
+      return;
+    }
+
+    // Check and request permissions if needed
+    final hasPermission = await areNotificationsEnabled();
+    if (!hasPermission) {
+      print('[NotificationService] Cannot schedule - permission denied');
+      return;
+    }
+
+    const AndroidNotificationDetails androidDetails =
+        AndroidNotificationDetails(
+          'exercise_reminders',
+          'Exercise Reminders',
+          channelDescription: 'Reminders to complete your daily exercises',
+          importance: Importance.high,
+          priority: Priority.high,
+          icon: '@mipmap/ic_launcher',
+        );
+
+    const DarwinNotificationDetails iosDetails = DarwinNotificationDetails(
+      presentAlert: true,
+      presentBadge: true,
+      presentSound: true,
+    );
+
+    const NotificationDetails details = NotificationDetails(
+      android: androidDetails,
+      iOS: iosDetails,
+    );
+
+    try {
+      final tzDateTime = tz.TZDateTime.from(scheduledTime, tz.local);
+      await _notificationsPlugin.zonedSchedule(
+        0, // Notification ID
+        'Time for your exercises! 💪',
+        'You have exercises waiting. Complete them to maintain your progress.',
+        tzDateTime,
+        details,
+        androidScheduleMode: AndroidScheduleMode.exactAllowWhileIdle,
+        uiLocalNotificationDateInterpretation:
+            UILocalNotificationDateInterpretation.absoluteTime,
+      );
+
+      print('[NotificationService] Notification scheduled for: $scheduledTime');
+    } catch (e) {
+      print('[NotificationService] Error scheduling notification: $e');
+    }
+  }
+
+  // Cancel all scheduled notifications
+  static Future<void> cancelAllNotifications() async {
+    if (kIsWeb) return;
+    await _notificationsPlugin.cancelAll();
+    print('[NotificationService] All scheduled notifications cancelled');
+  }
+
+  // Reschedule notification based on last exercise completion
+  static Future<void> rescheduleNotification(String userId) async {
+    if (kIsWeb) return;
+
+    try {
+      // Cancel any existing scheduled notifications
+      await cancelAllNotifications();
+
+      // Get the notification interval
+      final prefs = await SharedPreferences.getInstance();
+      final intervalHours = prefs.getInt('notification_interval_hours') ?? 25;
+
+      // Get all exercise IDs
+      final exerciseIds = await _getAllExerciseIds(userId);
+      if (exerciseIds.isEmpty) {
+        print('[NotificationService] No exercises found - not scheduling');
+        return;
+      }
+
+      // Get last check-in time
+      final lastCheckInTime = await _getLastCheckInTime(exerciseIds);
+      
+      DateTime scheduledTime;
+      if (lastCheckInTime != null) {
+        // Schedule notification X hours after last exercise completion
+        scheduledTime = lastCheckInTime.add(Duration(hours: intervalHours));
+        print('[NotificationService] Last exercise: ${lastCheckInTime.toIso8601String()}');
+      } else {
+        // No previous exercise completion, schedule for X hours from now
+        scheduledTime = DateTime.now().add(Duration(hours: intervalHours));
+        print('[NotificationService] No previous exercise, scheduling from now');
+      }
+
+      print('[NotificationService] Scheduling for: ${scheduledTime.toIso8601String()} (in $intervalHours hours)');
+
+      // Only schedule if the time is in the future
+      if (scheduledTime.isAfter(DateTime.now())) {
+        await scheduleNotification(scheduledTime);
+      } else {
+        // If the time has passed, show notification immediately
+        print('[NotificationService] Scheduled time is in past, showing immediately');
+        await showExerciseReminder();
+        // Then reschedule for next interval
+        final nextScheduledTime = DateTime.now().add(Duration(hours: intervalHours));
+        await scheduleNotification(nextScheduledTime);
+      }
+    } catch (e) {
+      print('[NotificationService] Error rescheduling notification: $e');
     }
   }
 }
