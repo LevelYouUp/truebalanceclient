@@ -2,6 +2,25 @@
     "firestore": {
         "rules": "firestore.rules"
     },
+    "hosting": {
+        "public": "public",
+        "ignore": [
+            "firebase.json",
+            "**/.*",
+            "**/node_modules/**"
+        ],
+        "headers": [
+            {
+                "source": "**/*.@(html|js|css)",
+                "headers": [
+                    {
+                        "key": "Cache-Control",
+                        "value": "max-age=3600"
+                    }
+                ]
+            }
+        ]
+    },
     "flutter": {
         "platforms": {
             "android": {
