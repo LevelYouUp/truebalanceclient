@@ -10,6 +10,7 @@ import 'exercise_video_player.dart';
 import 'exercise_reminder_manager.dart';
 import 'screens/home_screen.dart';
 import 'screens/messages_screen.dart';
+import 'screens/forgot_password_screen.dart';
 
 // Simple passcode validation service using encrypted passcode comparison
 class PasscodeService {
@@ -121,6 +122,7 @@ class MyApp extends StatelessWidget {
       theme: ThemeData(
         colorScheme: ColorScheme.fromSeed(seedColor: Colors.deepPurple),
       ),
+      debugShowCheckedModeBanner: false,
       home: const AuthGate(),
     );
   }
@@ -1302,7 +1304,30 @@ class _LoginFormState extends State<_LoginForm> {
               return null;
             },
           ),
-          const SizedBox(height: 24),
+          const SizedBox(height: 12),
+
+          // Forgot Password link
+          Align(
+            alignment: Alignment.centerRight,
+            child: TextButton(
+              onPressed: () {
+                Navigator.of(context).push(
+                  MaterialPageRoute(
+                    builder: (context) => const ForgotPasswordScreen(),
+                  ),
+                );
+              },
+              child: const Text(
+                'Forgot Password?',
+                style: TextStyle(
+                  color: Colors.deepPurple,
+                  fontSize: 14,
+                  fontWeight: FontWeight.w500,
+                ),
+              ),
+            ),
+          ),
+          const SizedBox(height: 12),
 
           // Sign in button
           SizedBox(
