@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import '../exercise_reminder_manager.dart';
 import '../notification_service.dart';
 import '../main.dart'; // For PainHistoryView, PlanTile, ExerciseTile, MessageButtonRow, and InactiveUserPage
+import '../models/notification_schedule_settings.dart';
 import 'messages_screen.dart';
 
 // Helper class to manage congratulatory exercise state across the app
@@ -18,15 +19,33 @@ class HomeScreen extends StatefulWidget {
   State<HomeScreen> createState() => _HomeScreenState();
 }
 
-class _HomeScreenState extends State<HomeScreen> {
+class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   // Counter to force rebuild of exercise status message when exercise is completed
   int _exerciseCompletionCounter = 0;
 
   @override
   void initState() {
     super.initState();
+    // Add lifecycle observer to check for pending reschedule when app resumes
+    WidgetsBinding.instance.addObserver(this);
+    
     // Clear any congratulatory text when the screen initializes/refreshes
     ExerciseCongratulatoryState.currentCongratulatoryExercise = null;
+  }
+  
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+  
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      print('[HomeScreen] App resumed - checking for needed reschedule');
+      // When app resumes, NotificationService.initialize() will check the flag
+      // set by WorkManager and reschedule if needed
+    }
   }
 
   // Method to be called when an exercise is completed
@@ -628,164 +647,483 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
+  // Helper method to build day of week toggle button
+  Widget _buildDayToggle(
+    String label,
+    int dayNumber,
+    NotificationScheduleSettings settings,
+    Function(NotificationScheduleSettings) onToggle,
+  ) {
+    final isSelected = settings.selectedDays.contains(dayNumber);
+    
+    return Flexible(
+      child: InkWell(
+        onTap: () {
+          final newDays = Set<int>.from(settings.selectedDays);
+          if (isSelected) {
+            // Don't allow deselecting if it's the last day
+            if (newDays.length > 1) {
+              newDays.remove(dayNumber);
+            }
+          } else {
+            newDays.add(dayNumber);
+          }
+          onToggle(settings.copyWith(selectedDays: newDays));
+        },
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 50),
+          child: Container(
+            padding: const EdgeInsets.symmetric(vertical: 6, horizontal: 2),
+            child: FittedBox(
+              fit: BoxFit.scaleDown,
+              child: Text(
+                label,
+                style: TextStyle(
+                  color: isSelected ? Colors.deepPurple : Colors.grey[600],
+                  fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+                  fontSize: 14,
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
   // Notification settings dialog
   void _showNotificationSettingsDialog(BuildContext context) {
     showDialog(
       context: context,
-      builder: (BuildContext context) {
+      builder: (BuildContext dialogContext) {
+        NotificationScheduleSettings? localSettings;
+        bool hasChanges = false;
+        bool isSaving = false;
+        
         return StatefulBuilder(
           builder: (context, setState) {
             return AlertDialog(
               title: const Text('Exercise Reminder Settings'),
-              content: FutureBuilder<Map<String, dynamic>>(
-                future: () async {
-                  final isEnabled =
-                      await ExerciseReminderManager.areRemindersEnabled();
-                  final intervalHours =
-                      await ExerciseReminderManager.getNotificationIntervalHours();
-                  return {
-                    'isEnabled': isEnabled,
-                    'intervalHours': intervalHours,
-                  };
-                }(),
+              content: FutureBuilder<NotificationScheduleSettings>(
+                future: NotificationScheduleSettings.load(),
                 builder: (context, snapshot) {
                   if (!snapshot.hasData) {
-                    return const CircularProgressIndicator();
+                    return const SizedBox(
+                      height: 100,
+                      child: Center(child: CircularProgressIndicator()),
+                    );
                   }
 
-                  final data = snapshot.data!;
-                  final isEnabled = data['isEnabled'] as bool;
-                  final intervalHours = data['intervalHours'] as int;
+                  // Initialize local settings on first load
+                  localSettings ??= snapshot.data!;
+                  final settings = localSettings!;
 
-                  return Column(
-                    mainAxisSize: MainAxisSize.min,
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      const Text(
-                        'Get reminders to complete your exercises if you haven\'t done them in the configured time period.',
-                        style: TextStyle(fontSize: 14),
-                      ),
-                      const SizedBox(height: 16),
-                      SwitchListTile(
-                        title: const Text('Enable Exercise Reminders'),
-                        subtitle: Text(
-                          isEnabled
-                              ? 'You will receive notifications'
-                              : 'No notifications will be sent',
-                        ),
-                        value: isEnabled,
-                        onChanged: (bool value) async {
-                          await ExerciseReminderManager.setRemindersEnabled(
-                            value,
-                          );
-                          setState(() {}); // Refresh the dialog
-                        },
-                      ),
-                      if (isEnabled) ...[
-                        const SizedBox(height: 16),
+                  return SingleChildScrollView(
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
                         const Text(
-                          'Remind me every:',
-                          style: TextStyle(
-                            fontSize: 16,
-                            fontWeight: FontWeight.w500,
-                          ),
+                          'Choose when you want to receive exercise reminders.',
+                          style: TextStyle(fontSize: 14),
                         ),
-                        const SizedBox(height: 12),
-                        Container(
-                          width: double.infinity,
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 12,
-                            vertical: 8,
+                        const SizedBox(height: 16),
+                        
+                        // Enable/Disable switch
+                        SwitchListTile(
+                          title: const Text('Enable Exercise Reminders'),
+                          subtitle: Text(
+                            settings.enabled
+                                ? 'You will receive notifications'
+                                : 'No notifications will be sent',
                           ),
-                          decoration: BoxDecoration(
-                            border: Border.all(color: Colors.grey),
-                            borderRadius: BorderRadius.circular(8),
-                          ),
-                          child: DropdownButtonHideUnderline(
-                            child: DropdownButton<int>(
-                              value: intervalHours.clamp(1, 48),
-                              isExpanded: true,
-                              items: List.generate(48, (index) {
-                                final hours = index + 1;
-                                return DropdownMenuItem<int>(
-                                  value: hours,
-                                  child: Text(
-                                    hours == 1 ? '$hours hour' : '$hours hours',
-                                    style: const TextStyle(fontSize: 14),
-                                  ),
-                                );
-                              }),
-                              onChanged: (int? newHours) async {
-                                if (newHours != null) {
-                                  await ExerciseReminderManager.setNotificationIntervalHours(
-                                    newHours,
-                                  );
-                                  setState(() {}); // Refresh the dialog
-                                }
-                              },
+                          value: settings.enabled,
+                          onChanged: (bool value) {
+                            setState(() {
+                              localSettings = settings.copyWith(enabled: value);
+                              hasChanges = true;
+                            });
+                          },
+                        ),
+                        
+                        if (settings.enabled) ...[
+                          const SizedBox(height: 16),
+                          const Divider(),
+                          const SizedBox(height: 16),
+                          
+                          // Days of week selection
+                          const Text(
+                            'Active Days:',
+                            style: TextStyle(
+                              fontSize: 16,
+                              fontWeight: FontWeight.w500,
                             ),
                           ),
-                        ),
-                        const SizedBox(height: 12),
-                        Text(
-                          'You will receive reminders every $intervalHours hour${intervalHours == 1 ? '' : 's'} after your most recent exercise.',
-                          style: const TextStyle(
-                            fontSize: 12,
-                            color: Colors.grey,
+                          const SizedBox(height: 12),
+                          Row(
+                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                            children: [
+                              _buildDayToggle('M', 1, settings, (updatedSettings) {
+                                setState(() {
+                                  localSettings = updatedSettings;
+                                  hasChanges = true;
+                                });
+                              }),
+                              _buildDayToggle('T', 2, settings, (updatedSettings) {
+                                setState(() {
+                                  localSettings = updatedSettings;
+                                  hasChanges = true;
+                                });
+                              }),
+                              _buildDayToggle('W', 3, settings, (updatedSettings) {
+                                setState(() {
+                                  localSettings = updatedSettings;
+                                  hasChanges = true;
+                                });
+                              }),
+                              _buildDayToggle('T', 4, settings, (updatedSettings) {
+                                setState(() {
+                                  localSettings = updatedSettings;
+                                  hasChanges = true;
+                                });
+                              }),
+                              _buildDayToggle('F', 5, settings, (updatedSettings) {
+                                setState(() {
+                                  localSettings = updatedSettings;
+                                  hasChanges = true;
+                                });
+                              }),
+                              _buildDayToggle('S', 6, settings, (updatedSettings) {
+                                setState(() {
+                                  localSettings = updatedSettings;
+                                  hasChanges = true;
+                                });
+                              }),
+                              _buildDayToggle('S', 7, settings, (updatedSettings) {
+                                setState(() {
+                                  localSettings = updatedSettings;
+                                  hasChanges = true;
+                                });
+                              }),
+                            ],
                           ),
-                        ),
-                        const SizedBox(height: 16),
-                        Text(
-                          'ℹ️ Notifications will only be sent once per day and only if you have exercises assigned but haven\'t completed any in the last $intervalHours hours.',
-                          style: const TextStyle(
-                            fontSize: 12,
-                            color: Colors.grey,
+                          const SizedBox(height: 8),
+                          Center(
+                            child: Text(
+                              settings.selectedDaysFormatted,
+                              style: const TextStyle(
+                                fontSize: 12,
+                                color: Colors.grey,
+                              ),
+                            ),
                           ),
-                        ),
-                        const SizedBox(height: 16),
-                        ElevatedButton.icon(
-                          icon: const Icon(Icons.notifications_active),
-                          label: const Text('Test Notification'),
-                          onPressed: () async {
-                            // Check permission status first
-                            final hasPermission = await NotificationService.areNotificationsEnabled();
-                            
-                            if (!hasPermission) {
-                              // Request permission
-                              final granted = await NotificationService.requestPermissions();
-                              if (!granted) {
+                          
+                          const SizedBox(height: 16),
+                          const Divider(),
+                          const SizedBox(height: 16),
+                          
+                          // Mode selection
+                          const Text(
+                            'Notification Schedule:',
+                            style: TextStyle(
+                              fontSize: 16,
+                              fontWeight: FontWeight.w500,
+                            ),
+                          ),
+                          const SizedBox(height: 12),
+                          
+                          // Once Daily option
+                          RadioListTile<NotificationMode>(
+                            title: const Text('Once Daily'),
+                            subtitle: Text(
+                              settings.mode == NotificationMode.onceDaily
+                                  ? 'At ${settings.dailyTimeFormatted}'
+                                  : 'Reminder at a specific time each day',
+                              style: TextStyle(
+                                fontSize: 12,
+                                color: settings.mode == NotificationMode.onceDaily
+                                    ? Colors.deepPurple
+                                    : Colors.grey,
+                              ),
+                            ),
+                            value: NotificationMode.onceDaily,
+                            groupValue: settings.mode,
+                            onChanged: (NotificationMode? value) {
+                              if (value != null) {
+                                setState(() {
+                                  localSettings = settings.copyWith(mode: value);
+                                  hasChanges = true;
+                                });
+                              }
+                            },
+                          ),
+                          
+                          // Daily time picker
+                          if (settings.mode == NotificationMode.onceDaily)
+                            Padding(
+                              padding: const EdgeInsets.only(left: 32, right: 16, bottom: 8),
+                              child: Row(
+                                children: [
+                                  const Text('Time: '),
+                                  const SizedBox(width: 8),
+                                  OutlinedButton(
+                                    onPressed: () async {
+                                      final TimeOfDay? picked = await showTimePicker(
+                                        context: context,
+                                        initialTime: TimeOfDay(
+                                          hour: settings.dailyHour,
+                                          minute: settings.dailyMinute,
+                                        ),
+                                      );
+                                      if (picked != null) {
+                                        setState(() {
+                                          localSettings = settings.copyWith(
+                                            dailyHour: picked.hour,
+                                            dailyMinute: picked.minute,
+                                          );
+                                          hasChanges = true;
+                                        });
+                                      }
+                                    },
+                                    child: Text(
+                                      settings.dailyTimeFormatted,
+                                      style: const TextStyle(fontSize: 16),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          
+                          const SizedBox(height: 8),
+                          
+                          // Frequent option
+                          RadioListTile<NotificationMode>(
+                            title: const Text('More Frequent'),
+                            subtitle: Text(
+                              settings.mode == NotificationMode.frequent
+                                  ? 'Every ${settings.frequentIntervalFormatted}, ${settings.windowFormatted}'
+                                  : 'Multiple reminders during specific hours',
+                              style: TextStyle(
+                                fontSize: 12,
+                                color: settings.mode == NotificationMode.frequent
+                                    ? Colors.deepPurple
+                                    : Colors.grey,
+                              ),
+                            ),
+                            value: NotificationMode.frequent,
+                            groupValue: settings.mode,
+                            onChanged: (NotificationMode? value) {
+                              if (value != null) {
+                                setState(() {
+                                  localSettings = settings.copyWith(mode: value);
+                                  hasChanges = true;
+                                });
+                              }
+                            },
+                          ),
+                          
+                          // Frequent mode settings
+                          if (settings.mode == NotificationMode.frequent)
+                            Padding(
+                              padding: const EdgeInsets.only(left: 32, right: 16),
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  // Frequency dropdown
+                                  const Text(
+                                    'Frequency:',
+                                    style: TextStyle(fontSize: 14, fontWeight: FontWeight.w500),
+                                  ),
+                                  const SizedBox(height: 8),
+                                  Container(
+                                    width: double.infinity,
+                                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+                                    decoration: BoxDecoration(
+                                      border: Border.all(color: Colors.grey),
+                                      borderRadius: BorderRadius.circular(8),
+                                    ),
+                                    child: DropdownButtonHideUnderline(
+                                      child: DropdownButton<int>(
+                                        value: settings.frequentIntervalMinutes,
+                                        isExpanded: true,
+                                        items: [
+                                          DropdownMenuItem(value: 30, child: Text('Every 30 minutes')),
+                                          DropdownMenuItem(value: 60, child: Text('Every hour')),
+                                          DropdownMenuItem(value: 90, child: Text('Every 1.5 hours')),
+                                          DropdownMenuItem(value: 120, child: Text('Every 2 hours')),
+                                          DropdownMenuItem(value: 180, child: Text('Every 3 hours')),
+                                          DropdownMenuItem(value: 240, child: Text('Every 4 hours')),
+                                        ],
+                                        onChanged: (int? value) {
+                                          if (value != null) {
+                                            setState(() {
+                                              localSettings = settings.copyWith(frequentIntervalMinutes: value);
+                                              hasChanges = true;
+                                            });
+                                          }
+                                        },
+                                      ),
+                                    ),
+                                  ),
+                                  const SizedBox(height: 16),
+                                  
+                                  // Time window
+                                  const Text(
+                                    'Active Hours:',
+                                    style: TextStyle(fontSize: 14, fontWeight: FontWeight.w500),
+                                  ),
+                                  const SizedBox(height: 8),
+                                  Row(
+                                    children: [
+                                      Expanded(
+                                        child: OutlinedButton(
+                                          onPressed: () async {
+                                            final TimeOfDay? picked = await showTimePicker(
+                                              context: context,
+                                              initialTime: TimeOfDay(
+                                                hour: settings.windowStartHour,
+                                                minute: settings.windowStartMinute,
+                                              ),
+                                              helpText: 'Start Time',
+                                            );
+                                            if (picked != null) {
+                                              setState(() {
+                                                localSettings = settings.copyWith(
+                                                  windowStartHour: picked.hour,
+                                                  windowStartMinute: picked.minute,
+                                                );
+                                                hasChanges = true;
+                                              });
+                                            }
+                                          },
+                                          child: Column(
+                                            children: [
+                                              const Text('From', style: TextStyle(fontSize: 10)),
+                                              Text(
+                                                '${settings.windowStartHour > 12 ? settings.windowStartHour - 12 : (settings.windowStartHour == 0 ? 12 : settings.windowStartHour)}:${settings.windowStartMinute.toString().padLeft(2, '0')} ${settings.windowStartHour >= 12 ? 'PM' : 'AM'}',
+                                                style: const TextStyle(fontSize: 14),
+                                              ),
+                                            ],
+                                          ),
+                                        ),
+                                      ),
+                                      const SizedBox(width: 8),
+                                      const Icon(Icons.arrow_forward, size: 16),
+                                      const SizedBox(width: 8),
+                                      Expanded(
+                                        child: OutlinedButton(
+                                          onPressed: () async {
+                                            final TimeOfDay? picked = await showTimePicker(
+                                              context: context,
+                                              initialTime: TimeOfDay(
+                                                hour: settings.windowEndHour,
+                                                minute: settings.windowEndMinute,
+                                              ),
+                                              helpText: 'End Time',
+                                            );
+                                            if (picked != null) {
+                                              setState(() {
+                                                localSettings = settings.copyWith(
+                                                  windowEndHour: picked.hour,
+                                                  windowEndMinute: picked.minute,
+                                                );
+                                                hasChanges = true;
+                                              });
+                                            }
+                                          },
+                                          child: Column(
+                                            children: [
+                                              const Text('To', style: TextStyle(fontSize: 10)),
+                                              Text(
+                                                '${settings.windowEndHour > 12 ? settings.windowEndHour - 12 : (settings.windowEndHour == 0 ? 12 : settings.windowEndHour)}:${settings.windowEndMinute.toString().padLeft(2, '0')} ${settings.windowEndHour >= 12 ? 'PM' : 'AM'}',
+                                                style: const TextStyle(fontSize: 14),
+                                              ),
+                                            ],
+                                          ),
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ],
+                              ),
+                            ),
+                          
+                          const SizedBox(height: 16),
+                          const Divider(),
+                          const SizedBox(height: 16),
+                          
+                          // Test notification button
+                          SizedBox(
+                            width: double.infinity,
+                            child: ElevatedButton.icon(
+                              icon: const Icon(Icons.notifications_active),
+                              label: const Text('Test Notification'),
+                              onPressed: () async {
+                                final hasPermission = await NotificationService.areNotificationsEnabled();
+                                
+                                if (!hasPermission) {
+                                  final granted = await NotificationService.requestPermissions();
+                                  if (!granted) {
+                                    Navigator.of(context).pop();
+                                    ScaffoldMessenger.of(context).showSnackBar(
+                                      const SnackBar(
+                                        content: Text('Notification permission denied. Please enable notifications in your device settings.'),
+                                        duration: Duration(seconds: 4),
+                                      ),
+                                    );
+                                    return;
+                                  }
+                                }
+                                
+                                await ExerciseReminderManager.triggerTestNotification();
                                 Navigator.of(context).pop();
                                 ScaffoldMessenger.of(context).showSnackBar(
                                   const SnackBar(
-                                    content: Text('Notification permission denied. Please enable notifications in your device settings.'),
-                                    duration: Duration(seconds: 4),
+                                    content: Text('Test notification sent! Check your notification tray.'),
+                                    duration: Duration(seconds: 3),
                                   ),
                                 );
-                                return;
-                              }
-                            }
-                            
-                            // Send test notification
-                            await ExerciseReminderManager.triggerTestNotification();
-                            Navigator.of(context).pop();
-                            ScaffoldMessenger.of(context).showSnackBar(
-                              const SnackBar(
-                                content: Text('Test notification sent! Check your notification tray.'),
-                                duration: Duration(seconds: 3),
-                              ),
-                            );
-                          },
-                        ),
+                              },
+                            ),
+                          ),
+                        ],
                       ],
-                    ],
+                    ),
                   );
                 },
               ),
               actions: [
                 TextButton(
-                  child: const Text('Close'),
-                  onPressed: () {
+                  child: const Text('Cancel'),
+                  onPressed: isSaving ? null : () {
                     Navigator.of(context).pop();
+                  },
+                ),
+                TextButton(
+                  child: isSaving
+                      ? const SizedBox(
+                          width: 16,
+                          height: 16,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : const Text('Save'),
+                  onPressed: isSaving ? null : () async {
+                    if (localSettings != null && hasChanges) {
+                      setState(() {
+                        isSaving = true;
+                      });
+                      
+                      try {
+                        await localSettings!.save();
+                        await ExerciseReminderManager.updateNotificationSchedule(localSettings!);
+                      } finally {
+                        if (context.mounted) {
+                          Navigator.of(context).pop();
+                        }
+                      }
+                    } else {
+                      Navigator.of(context).pop();
+                    }
                   },
                 ),
               ],
