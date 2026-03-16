@@ -1061,44 +1061,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                               ),
                             ),
                           
-                          const SizedBox(height: 16),
-                          const Divider(),
-                          const SizedBox(height: 16),
-                          
-                          // Test notification button
-                          SizedBox(
-                            width: double.infinity,
-                            child: ElevatedButton.icon(
-                              icon: const Icon(Icons.notifications_active),
-                              label: const Text('Test Notification'),
-                              onPressed: () async {
-                                final hasPermission = await NotificationService.areNotificationsEnabled();
-                                
-                                if (!hasPermission) {
-                                  final granted = await NotificationService.requestPermissions();
-                                  if (!granted) {
-                                    Navigator.of(context).pop();
-                                    ScaffoldMessenger.of(context).showSnackBar(
-                                      const SnackBar(
-                                        content: Text('Notification permission denied. Please enable notifications in your device settings.'),
-                                        duration: Duration(seconds: 4),
-                                      ),
-                                    );
-                                    return;
-                                  }
-                                }
-                                
-                                await ExerciseReminderManager.triggerTestNotification();
-                                Navigator.of(context).pop();
-                                ScaffoldMessenger.of(context).showSnackBar(
-                                  const SnackBar(
-                                    content: Text('Test notification sent! Check your notification tray.'),
-                                    duration: Duration(seconds: 3),
-                                  ),
-                                );
-                              },
-                            ),
-                          ),
+
                         ],
                       ],
                     ),

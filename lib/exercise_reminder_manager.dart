@@ -349,21 +349,5 @@ class ExerciseReminderManager {
       await updateNotificationSchedule(settings);
     }
   }
-
-  // Manual trigger for testing
-  static Future<void> triggerTestNotification() async {
-    if (kIsWeb) {
-      print('[ExerciseReminderManager] Test notification skipped on web platform');
-      return;
-    }
-    print('[ExerciseReminderManager] Triggering test notifications (immediate + 5s delayed)');
-    // Immediate notification
-    await NotificationService.showExerciseReminder();
-    // Scheduled notification 5 seconds later — close the app to verify background delivery
-    await NotificationService.scheduleNotification(
-      DateTime.now().add(const Duration(seconds: 5)),
-      notificationId: 99,
-    );
-    print('[ExerciseReminderManager] Test notification scheduled for 5s from now');
-  }
 }
+
