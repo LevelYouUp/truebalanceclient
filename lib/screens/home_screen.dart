@@ -1,6 +1,7 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../exercise_reminder_manager.dart';
 import '../notification_service.dart';
 import '../main.dart'; // For PainHistoryView, PlanTile, ExerciseTile, MessageButtonRow, and InactiveUserPage
@@ -43,8 +44,20 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
       print('[HomeScreen] App resumed - checking for needed reschedule');
-      // When app resumes, NotificationService.initialize() will check the flag
-      // set by WorkManager and reschedule if needed
+      _checkAndRescheduleIfNeeded();
+    }
+  }
+
+  Future<void> _checkAndRescheduleIfNeeded() async {
+    final prefs = await SharedPreferences.getInstance();
+    final needsReschedule = prefs.getBool('needs_reschedule') ?? false;
+    if (needsReschedule) {
+      print('[HomeScreen] Rescheduling notifications after WorkManager flag');
+      await prefs.setBool('needs_reschedule', false);
+      final settings = await NotificationScheduleSettings.load();
+      if (settings.enabled) {
+        await ExerciseReminderManager.updateNotificationSchedule(settings);
+      }
     }
   }
 

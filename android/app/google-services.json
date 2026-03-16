@@ -9,10 +9,15 @@
       "client_info": {
         "mobilesdk_app_id": "1:514659484039:android:ee093eab72f01f9d3c1322",
         "android_client_info": {
-          "package_name": "com.levelyouup.truebalanceathome"
+          "package_name": "com.example.truebalanceclient"
         }
       },
-      "oauth_client": [],
+      "oauth_client": [
+        {
+          "client_id": "514659484039-rd0c7es5it6i6q3sq177bk361oshj43e.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
       "api_key": [
         {
           "current_key": "AIzaSyD8d0d8qcaYU_ueA3dXAmAQ6EWGx5bdC3Y"
@@ -20,7 +25,55 @@
       ],
       "services": {
         "appinvite_service": {
-          "other_platform_oauth_client": []
+          "other_platform_oauth_client": [
+            {
+              "client_id": "514659484039-rd0c7es5it6i6q3sq177bk361oshj43e.apps.googleusercontent.com",
+              "client_type": 3
+            },
+            {
+              "client_id": "514659484039-lm3m0qjettabpq1o8ggcbrsmthqamfo6.apps.googleusercontent.com",
+              "client_type": 2,
+              "ios_info": {
+                "bundle_id": "com.example.truebalanceclient"
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:514659484039:android:fee5ca9d2e55844a3c1322",
+        "android_client_info": {
+          "package_name": "com.levelyouup.truebalanceathome"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "514659484039-rd0c7es5it6i6q3sq177bk361oshj43e.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyD8d0d8qcaYU_ueA3dXAmAQ6EWGx5bdC3Y"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "514659484039-rd0c7es5it6i6q3sq177bk361oshj43e.apps.googleusercontent.com",
+              "client_type": 3
+            },
+            {
+              "client_id": "514659484039-lm3m0qjettabpq1o8ggcbrsmthqamfo6.apps.googleusercontent.com",
+              "client_type": 2,
+              "ios_info": {
+                "bundle_id": "com.example.truebalanceclient"
+              }
+            }
+          ]
         }
       }
     }

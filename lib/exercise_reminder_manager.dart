@@ -94,12 +94,21 @@ class ExerciseReminderManager {
     // This is the minimum interval for Android WorkManager periodic tasks
     await _registerPeriodicCheckTask();
     
-    // Schedule notifications based on user's settings
+    // Only reschedule notifications if needed (next notification is missing or in the past)
+    // This avoids re-scheduling hundreds of exact alarms on every cold start
     final user = FirebaseAuth.instance.currentUser;
     if (user != null) {
-      final settings = await NotificationScheduleSettings.load();
-      if (settings.enabled) {
-        await updateNotificationSchedule(settings);
+      final prefs = await SharedPreferences.getInstance();
+      final nextStr = prefs.getString('next_notification_time');
+      final needsReschedule = prefs.getBool('needs_reschedule') ?? false;
+      final isPastDue = nextStr == null ||
+          DateTime.tryParse(nextStr)?.isBefore(DateTime.now()) == true;
+      if (needsReschedule || isPastDue) {
+        final settings = await NotificationScheduleSettings.load();
+        if (settings.enabled) {
+          await prefs.setBool('needs_reschedule', false);
+          await updateNotificationSchedule(settings);
+        }
       }
     }
     
@@ -295,8 +304,9 @@ class ExerciseReminderManager {
       await Workmanager().registerOneOffTask(
         'boot_complete',
         'boot_complete',
+        existingWorkPolicy: ExistingWorkPolicy.keep,
         constraints: Constraints(
-          networkType: NetworkType.connected,
+          networkType: NetworkType.notRequired,
         ),
         initialDelay: Duration.zero,
       );
@@ -317,6 +327,7 @@ class ExerciseReminderManager {
         'periodic_notification_check',
         'periodic_notification_check',
         frequency: const Duration(minutes: 15), // Minimum for Android
+        existingWorkPolicy: ExistingPeriodicWorkPolicy.keep,
         constraints: Constraints(
           networkType: NetworkType.notRequired,
         ),
@@ -345,7 +356,14 @@ class ExerciseReminderManager {
       print('[ExerciseReminderManager] Test notification skipped on web platform');
       return;
     }
-    print('[ExerciseReminderManager] Triggering test notification');
+    print('[ExerciseReminderManager] Triggering test notifications (immediate + 5s delayed)');
+    // Immediate notification
     await NotificationService.showExerciseReminder();
+    // Scheduled notification 5 seconds later — close the app to verify background delivery
+    await NotificationService.scheduleNotification(
+      DateTime.now().add(const Duration(seconds: 5)),
+      notificationId: 99,
+    );
+    print('[ExerciseReminderManager] Test notification scheduled for 5s from now');
   }
 }

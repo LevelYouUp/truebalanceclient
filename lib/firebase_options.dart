@@ -52,7 +52,7 @@ class DefaultFirebaseOptions {
 
   static const FirebaseOptions android = FirebaseOptions(
     apiKey: 'AIzaSyD8d0d8qcaYU_ueA3dXAmAQ6EWGx5bdC3Y',
-    appId: '1:514659484039:android:ee093eab72f01f9d3c1322',
+    appId: '1:514659484039:android:fee5ca9d2e55844a3c1322',
     messagingSenderId: '514659484039',
     projectId: 'true-balance-8dac7',
     storageBucket: 'true-balance-8dac7.firebasestorage.app',
@@ -60,20 +60,20 @@ class DefaultFirebaseOptions {
 
   static const FirebaseOptions ios = FirebaseOptions(
     apiKey: 'AIzaSyDh0mFcWEcn8Tz_GAwpRGLBNH5scZE18sI',
-    appId: '1:514659484039:ios:4d4b18cdb4aab9bb3c1322',
+    appId: '1:514659484039:ios:d24df9d39647f25d3c1322',
     messagingSenderId: '514659484039',
     projectId: 'true-balance-8dac7',
     storageBucket: 'true-balance-8dac7.firebasestorage.app',
-    iosBundleId: 'com.example.truebalanceclient',
+    iosBundleId: 'com.levelyouup.truebalanceathome',
   );
 
   static const FirebaseOptions macos = FirebaseOptions(
     apiKey: 'AIzaSyDh0mFcWEcn8Tz_GAwpRGLBNH5scZE18sI',
-    appId: '1:514659484039:ios:4d4b18cdb4aab9bb3c1322',
+    appId: '1:514659484039:ios:d24df9d39647f25d3c1322',
     messagingSenderId: '514659484039',
     projectId: 'true-balance-8dac7',
     storageBucket: 'true-balance-8dac7.firebasestorage.app',
-    iosBundleId: 'com.example.truebalanceclient',
+    iosBundleId: 'com.levelyouup.truebalanceathome',
   );
 
   static const FirebaseOptions windows = FirebaseOptions(
@@ -85,4 +85,5 @@ class DefaultFirebaseOptions {
     storageBucket: 'true-balance-8dac7.firebasestorage.app',
     measurementId: 'G-2FX964KSLL',
   );
+
 }

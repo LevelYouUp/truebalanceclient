@@ -5,6 +5,7 @@ import 'package:flutter/foundation.dart';
 import 'dart:async';
 import 'package:timezone/timezone.dart' as tz;
 import 'package:timezone/data/latest.dart' as tz;
+import 'package:flutter_timezone/flutter_timezone.dart';
 
 class NotificationService {
   static final FlutterLocalNotificationsPlugin _notificationsPlugin =
@@ -23,6 +24,8 @@ class NotificationService {
     // Initialize timezone database for scheduled notifications
     try {
       tz.initializeTimeZones();
+      final timezoneInfo = await FlutterTimezone.getLocalTimezone();
+      tz.setLocalLocation(tz.getLocation(timezoneInfo.identifier));
     } catch (e) {
       print('Error initializing timezone data: $e');
     }
@@ -198,16 +201,26 @@ class NotificationService {
 
     try {
       final tzDateTime = tz.TZDateTime.from(scheduledTime, tz.local);
+
+      // alarmClock mode uses AlarmManager.setAlarmClock() — exact on all Android
+      // versions, requires no special permission (unlike exactAllowWhileIdle which
+      // needs SCHEDULE_EXACT_ALARM on Android 12 and causes a SecurityException crash).
       await _notificationsPlugin.zonedSchedule(
-        notificationId, // Use provided ID instead of always 0
+        notificationId,
         'Time for your exercises! 💪',
         'You have exercises waiting. Complete them to maintain your progress.',
         tzDateTime,
         details,
-        androidScheduleMode: AndroidScheduleMode.exactAllowWhileIdle,
+        androidScheduleMode: AndroidScheduleMode.alarmClock,
         uiLocalNotificationDateInterpretation:
             UILocalNotificationDateInterpretation.absoluteTime,
       );
+
+      // Save the first/earliest notification time so WorkManager can check if it's stale
+      if (notificationId == 0) {
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.setString('next_notification_time', scheduledTime.toIso8601String());
+      }
 
       print('[NotificationService] Notification scheduled for: $scheduledTime');
     } catch (e) {
